@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Etiquetador de hablantes — Podcast Ale &amp; Evo</title>
+<style>
+  :root{
+    --bg:#0E0E12; --card:#17171F; --line:#2A2A36; --txt:#F2F2F5; --muted:#9A9AAB;
+    --ale:#FF9F1C;            /* mango — etiqueta de Ale en Premiere */
+    --evo:#FF4D8D;            /* rosa  — etiqueta de Evo en Premiere */
+    --ok:#22C7A9; --warn:#FFB020; --bad:#FF4D4D;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--txt);
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  button,select,input{font:inherit;color:inherit}
+  button{
+    background:#20202B; border:1px solid var(--line); color:var(--txt);
+    padding:7px 12px; border-radius:8px; cursor:pointer; transition:.12s;
+  }
+  button:hover{background:#2A2A38; border-color:#3d3d4e}
+  button:disabled{opacity:.35; cursor:not-allowed}
+  button.primary{background:var(--ok); border-color:var(--ok); color:#07211C; font-weight:600}
+  button.primary:hover{filter:brightness(1.1)}
+  button.ale{background:var(--ale); border-color:var(--ale); color:#2B1A00; font-weight:700}
+  button.evo{background:var(--evo); border-color:var(--evo); color:#2B0012; font-weight:700}
+  select,input[type=text]{background:#12121A;border:1px solid var(--line);border-radius:8px;padding:6px 9px}
+  input[type=text]{width:100%}
+  a.dl{display:none}
+  .muted{color:var(--muted)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+  /* ---------- barra superior ---------- */
+  header{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:10px 16px; border-bottom:1px solid var(--line); background:#12121A; flex:0 0 auto;
+  }
+  header h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.2px}
+  header h1 b{color:var(--ale)} header h1 i{color:var(--evo);font-style:normal}
+  .sep{width:1px;height:24px;background:var(--line)}
+  .filebtn{position:relative;overflow:hidden;display:inline-block}
+  .filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+  .pill{
+    font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);
+    background:#1A1A24;color:var(--muted);white-space:nowrap
+  }
+  .pill.on{color:var(--ok);border-color:#1c4a41;background:#0f221e}
+  #saveState{margin-left:auto}
+
+  /* ---------- cuerpo ---------- */
+  main{flex:1;display:grid;grid-template-columns:minmax(340px,420px) 1fr;min-height:0}
+  aside{border-right:1px solid var(--line);overflow-y:auto;padding:14px;background:#101017}
+  section#doc{overflow-y:auto;padding:18px 26px 45vh}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+  .panel.sticky{position:sticky;top:-14px;z-index:5;box-shadow:0 10px 24px -10px #000C}
+  .panel h2{font-size:11px;text-transform:uppercase;letter-spacing:.9px;color:var(--muted);margin:0 0 10px}
+
+  video{width:100%;border-radius:10px;background:#000;display:block;aspect-ratio:16/9}
+  #noMedia{
+    width:100%;aspect-ratio:16/9;border:1px dashed var(--line);border-radius:10px;display:flex;
+    align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:13px;padding:16px
+  }
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .row.tight{gap:6px}
+  .grow{flex:1}
+
+  /* mapa de colores */
+  #map{position:relative;height:34px;border-radius:7px;background:#08080C;overflow:hidden;cursor:pointer;border:1px solid var(--line)}
+  #map .seg{position:absolute;top:0;bottom:0}
+  #map .seg.ALE{background:var(--ale)} #map .seg.EVO{background:var(--evo)}
+  #playhead{position:absolute;top:-2px;bottom:-2px;width:2px;background:#fff;box-shadow:0 0 6px #fff;pointer-events:none}
+  .maplabels{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
+
+  /* barras de reparto */
+  .split{display:flex;height:10px;border-radius:99px;overflow:hidden;background:#08080C;margin:8px 0 6px}
+  .split i{display:block;height:100%}
+  .split i.a{background:var(--ale)} .split i.e{background:var(--evo)} .split i.n{background:#2A2A36}
+  .legend{display:flex;gap:14px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+  .legend b{color:var(--txt)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+  .dot.a{background:var(--ale)} .dot.e{background:var(--evo)} .dot.n{background:#2A2A36}
+
+  .stat{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;border-bottom:1px solid #1e1e28}
+  .stat:last-child{border:0}
+  .stat b{font-variant-numeric:tabular-nums}
+
+  .warn{font-size:12.5px;padding:7px 9px;border-radius:8px;margin-top:6px;line-height:1.4}
+  .warn.b{background:#2a1414;border:1px solid #5a2020;color:#ffb4b4}
+  .warn.w{background:#2a2312;border:1px solid #5a4a20;color:#ffdca8}
+  .warn.o{background:#0f221e;border:1px solid #1c4a41;color:#9fe8d8}
+  .warn a{color:inherit;cursor:pointer;text-decoration:underline}
+
+  kbd{
+    background:#20202B;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
+    padding:1px 6px;font:600 11px/1.6 ui-monospace,Menlo,monospace;color:var(--txt)
+  }
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:6px 10px;font-size:12.5px;align-items:center}
+  .keys span{color:var(--muted)}
+
+  /* ---------- transcripción ---------- */
+  #doc{font-size:16px;line-height:1.85}
+  .turn{
+    display:flex;align-items:center;gap:9px;margin:20px 0 6px;padding-top:12px;
+    border-top:1px solid var(--line);font-size:12px
+  }
+  .turn:first-child{border-top:0;margin-top:0;padding-top:0}
+  .badge{
+    font:700 11px/1 ui-monospace,Menlo,monospace;letter-spacing:1px;padding:5px 9px;border-radius:6px
+  }
+  .badge.ALE{background:var(--ale);color:#2B1A00} .badge.EVO{background:var(--evo);color:#2B0012}
+  .turn .tc{color:var(--muted);font-family:ui-monospace,Menlo,monospace}
+  .turn .del{
+    margin-left:4px;background:none;border:0;color:#5c5c70;padding:2px 6px;font-size:15px;line-height:1;border-radius:5px
+  }
+  .turn .del:hover{color:var(--bad);background:#2a1414}
+
+  .cue{cursor:pointer;border-radius:4px;padding:1px 0;color:#6E6E80;transition:color .1s}
+  .cue.ALE{color:#FFC978} .cue.EVO{color:#FF9EC0}
+  .cue:hover{background:#24243050;text-decoration:underline;text-decoration-color:#4a4a5e}
+  .cue.now{background:#FFFFFF;color:#0E0E12 !important;border-radius:4px;box-shadow:0 0 0 2px #fff}
+  .cue.cursor{box-shadow:inset 0 -2px 0 var(--ok)}
+
+  #empty{color:var(--muted);text-align:center;padding:14vh 20px;line-height:1.8}
+  #empty h3{color:var(--txt);font-size:19px;margin:0 0 8px}
+  #empty ol{display:inline-block;text-align:left;max-width:520px;padding-left:20px}
+  #empty li{margin:7px 0}
+
+  .toast{
+    position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
+    background:#22222E;border:1px solid var(--line);padding:9px 16px;border-radius:10px;
+    font-size:13.5px;opacity:0;pointer-events:none;transition:.18s;z-index:50;box-shadow:0 8px 28px #0009
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
+  details summary{cursor:pointer;color:var(--muted);font-size:12px;list-style:none;padding:2px 0}
+  details summary::-webkit-details-marker{display:none}
+  details summary:before{content:"▸ ";}
+  details[open] summary:before{content:"▾ ";}
+  .cfg{display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:12.5px;margin-top:8px}
+  .cfg label{color:var(--muted)}
+  @media (max-width:900px){ main{grid-template-columns:1fr} aside{border-right:0;border-bottom:1px solid var(--line)} }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><b>ALE</b> · <i>EVO</i> &nbsp;<span class="muted" style="font-weight:400">Etiquetador de hablantes</span></h1>
+  <div class="sep"></div>
+  <button class="filebtn">📄 Transcripción<input type="file" id="fTrans" accept=".srt,.txt,.vtt"></button>
+  <button class="filebtn">🎬 Video o audio<input type="file" id="fMedia" accept="video/*,audio/*"></button>
+  <span class="pill" id="pTrans">sin transcripción</span>
+  <span class="pill" id="pMedia">sin media</span>
+  <div class="sep"></div>
+  <button id="bSave">💾 Guardar avance</button>
+  <button class="filebtn">📂 Retomar<input type="file" id="fState" accept=".json"></button>
+  <span class="pill" id="saveState">sin cambios</span>
+</header>
+
+<main>
+  <aside>
+
+    <div class="panel sticky">
+      <h2>Previsualizador</h2>
+      <div id="noMedia">Carga el bruto en <b>🎬 Video o audio</b>.<br>No se sube a ningún lado: se abre desde tu disco.</div>
+      <video id="v" controls playsinline style="display:none"></video>
+      <div class="row tight" style="margin-top:9px">
+        <button id="bPlay" title="Espacio">▶︎</button>
+        <button id="bBack" title="←">−3s</button>
+        <button id="bFwd" title="→">+3s</button>
+        <select id="rate" title="Velocidad">
+          <option value="0.75">0.75×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.25">1.25×</option>
+          <option value="1.5">1.5×</option>
+          <option value="1.75">1.75×</option>
+          <option value="2">2×</option>
+        </select>
+        <span class="grow"></span>
+        <span class="mono muted" id="clock">00:00:00</span>
+      </div>
+      <div class="row tight" style="margin-top:8px">
+        <label class="muted" style="font-size:12.5px"><input type="checkbox" id="follow" checked> seguir la lectura</label>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Marcar quién habla</h2>
+      <div class="row">
+        <button class="ale grow" id="bAle">ALE &nbsp;<kbd style="color:#2B1A00;background:#0002;border-color:#0003">A</kbd></button>
+        <button class="evo grow" id="bEvo">EVO &nbsp;<kbd style="color:#2B0012;background:#0002;border-color:#0003">E</kbd></button>
+      </div>
+      <div class="row tight" style="margin-top:8px">
+        <button id="bDel" class="grow">Quitar marca <kbd>X</kbd></button>
+        <button id="bUndo" class="grow">Deshacer <kbd>⌘Z</kbd></button>
+      </div>
+      <div class="row tight" style="margin-top:8px">
+        <button id="bPrevMark" class="grow" title="[">◀ mover marca</button>
+        <button id="bNextMark" class="grow" title="]">mover marca ▶</button>
+      </div>
+      <div class="row tight" style="margin-top:8px">
+        <button id="bGap" class="grow">⏭ Ir al primer hueco sin marcar</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Mapa del episodio</h2>
+      <div id="map"><div id="playhead" style="left:0"></div></div>
+      <div class="maplabels"><span>00:00</span><span id="mapEnd">—</span></div>
+      <div class="split" id="split"><i class="n" style="width:100%"></i></div>
+      <div class="legend">
+        <span><i class="dot a"></i>Ale <b id="pctA">0%</b></span>
+        <span><i class="dot e"></i>Evo <b id="pctE">0%</b></span>
+        <span><i class="dot n"></i>sin marcar <b id="pctN">100%</b></span>
+      </div>
+      <div style="margin-top:10px">
+        <div class="stat"><span class="muted">Turnos</span><b id="stTurns">0</b></div>
+        <div class="stat"><span class="muted">Turno más corto</span><b id="stMin">—</b></div>
+        <div class="stat"><span class="muted">Líneas del bruto</span><b id="stCues">0</b></div>
+        <div class="stat"><span class="muted">Duración del bruto</span><b id="stDur">—</b></div>
+      </div>
+      <div id="warns"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Exportar</h2>
+      <div class="row tight" style="margin-bottom:10px">
+        <label class="muted" style="font-size:12.5px;white-space:nowrap">Capítulo nº</label>
+        <input type="text" id="cCap" placeholder="21" style="width:70px" class="mono">
+        <span class="muted grow" style="font-size:11.5px;text-align:right">nombra los archivos</span>
+      </div>
+      <button class="primary" id="xTxt" style="width:100%;margin-bottom:8px">📄 Transcripción marcada (.txt) → para el proyecto</button>
+      <button id="xXml" style="width:100%;margin-bottom:8px">🎬 Pista de colores para Premiere (.xml)</button>
+      <div class="row tight">
+        <button id="xCsv" class="grow">CSV</button>
+        <button id="xSrt" class="grow">SRT de respaldo</button>
+      </div>
+
+      <details style="margin-top:10px">
+        <summary>Ajustes del XML de Premiere</summary>
+        <div class="cfg">
+          <label>Cuadros por segundo</label>
+          <select id="cFps">
+            <option value="23.976">23.976</option>
+            <option value="24" selected>24</option>
+            <option value="25">25</option>
+            <option value="29.97">29.97</option>
+            <option value="30">30</option>
+            <option value="50">50</option>
+            <option value="59.94">59.94</option>
+            <option value="60">60</option>
+          </select>
+          <label>TC inicial del bruto</label>
+          <input type="text" id="cStart" value="00:00:00:00" class="mono">
+          <label>Disposición</label>
+          <select id="cMode">
+            <option value="2" selected>2 pistas: Ale arriba, Evo abajo</option>
+            <option value="1">1 sola tira de colores</option>
+          </select>
+          <label>Ruta del video</label>
+          <input type="text" id="cPath" placeholder="/Users/…/bruto-cap21.mp4">
+        </div>
+        <div class="muted" style="font-size:11.5px;margin-top:8px;line-height:1.5">
+          La ruta es opcional: sin ella Premiere te pedirá vincular el archivo una vez.
+          En Finder, clic derecho sobre el video con <kbd>⌥</kbd> apretada → «Copiar como ruta».
+        </div>
+      </details>
+    </div>
+
+    <div class="panel">
+      <h2>Teclado</h2>
+      <div class="keys">
+        <kbd>Espacio</kbd><span>reproducir / pausar</span>
+        <kbd>A</kbd><span>aquí empieza <b style="color:var(--ale)">Ale</b></span>
+        <kbd>E</kbd><span>aquí empieza <b style="color:var(--evo)">Evo</b></span>
+        <kbd>X</kbd><span>quitar la marca de esta línea</span>
+        <kbd>← →</kbd><span>±3 segundos</span>
+        <kbd>↑ ↓</kbd><span>línea anterior / siguiente</span>
+        <kbd>[ ]</kbd><span>mover la última marca una línea</span>
+        <kbd>1…6</kbd><span>velocidad de reproducción</span>
+        <kbd>G</kbd><span>ir al primer hueco sin marcar</span>
+        <kbd>S</kbd><span>guardar avance</span>
+        <kbd>⌘Z</kbd><span>deshacer</span>
+      </div>
+    </div>
+
+  </aside>
+
+  <section id="doc">
+    <div id="empty">
+      <h3>Carga la transcripción del bruto</h3>
+      <ol>
+        <li>Arriba, <b>📄 Transcripción</b>: el <span class="mono">.srt</span> o <span class="mono">.txt</span> del bruto, tal como sale (con muletillas y silencios).</li>
+        <li><b>🎬 Video o audio</b>: el mismo capítulo, para oírlo mientras marcas. Nada se sube a internet.</li>
+        <li>Dale ▶︎ y cada vez que cambie la voz, aprieta <kbd>A</kbd> o <kbd>E</kbd>. La marca manda hasta la siguiente.</li>
+        <li>Exporta la <b>transcripción marcada</b> y súbela al proyecto de Claude: te devuelve el mapa de montaje.</li>
+      </ol>
+      <p class="muted" style="margin-top:22px">Si el archivo ya trae <span class="mono">**ALE**</span> / <span class="mono">**EVO**</span>, los lee y puedes seguir corrigiendo desde ahí.</p>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+<a class="dl" id="dl"></a>
+
+<script>
+(function(){
+"use strict";
+
+/* ============================ estado ============================ */
+const S = {
+  cues: [],        // {ini, fin, texto, raw}
+  marks: new Map(),// idx -> 'ALE' | 'EVO'
+  cur: 0,          // línea con el cursor
+  now: -1,         // línea que suena
+  lastMark: null,  // última marca tocada (para [ y ])
+  auto: [],        // hablantes ya separados por la transcripción (Speaker 1/2)
+  undo: [],
+  transName: '',
+  mediaName: '',
+  dur: 0,          // duración del bruto en segundos (según transcripción)
+  dirty: false
+};
+const $ = s => document.querySelector(s);
+const el = {};
+['v','doc','empty','map','playhead','mapEnd','split','pctA','pctE','pctN','stTurns','stMin',
+ 'stCues','stDur','warns','clock','pTrans','pMedia','saveState','toast','dl','follow','rate',
+ 'cFps','cStart','cMode','cCap','cPath'].forEach(id => el[id] = document.getElementById(id));
+
+/* ============================ tiempo ============================ */
+const FPSMAP = {
+  '23.976':{tb:24,ntsc:'TRUE', r:24000/1001},
+  '24'    :{tb:24,ntsc:'FALSE',r:24},
+  '25'    :{tb:25,ntsc:'FALSE',r:25},
+  '29.97' :{tb:30,ntsc:'TRUE', r:30000/1001},
+  '30'    :{tb:30,ntsc:'FALSE',r:30},
+  '50'    :{tb:50,ntsc:'FALSE',r:50},
+  '59.94' :{tb:60,ntsc:'TRUE', r:60000/1001},
+  '60'    :{tb:60,ntsc:'FALSE',r:60}
+};
+const fps = () => FPSMAP[el.cFps.value] || FPSMAP['24'];
+
+// acepta 00:01:02,500 · 00:01:02.5 · 00:22:40:13 (frames) · 01:02
+function toSec(t, framerate){
+  const f = framerate || fps().r;
+  t = String(t).trim().replace(',', '.');
+  let p = t.split(':');
+  if (p.length === 4) return (+p[0])*3600 + (+p[1])*60 + (+p[2]) + (+p[3])/f;
+  if (p.length === 2) p = ['0'].concat(p);
+  return (+p[0])*3600 + (+p[1])*60 + parseFloat(p[2]);
+}
+const p2 = n => String(n).padStart(2,'0');
+function hms(s){
+  s = Math.max(0, s||0);
+  return p2(Math.floor(s/3600))+':'+p2(Math.floor(s/60)%60)+':'+p2(Math.floor(s)%60);
+}
+function ms(s){
+  s = Math.max(0, s||0);
+  return p2(Math.floor(s/60))+':'+p2(Math.floor(s)%60);
+}
+function tcFrames(str, f){                       // "01:00:00:00" -> frames
+  const p = String(str||'0').split(':').map(n=>parseInt(n,10)||0);
+  while (p.length < 4) p.unshift(0);
+  return Math.round((p[0]*3600 + p[1]*60 + p[2]) * f) + p[3];
+}
+function framesToTC(fr, f){
+  const tb = Math.round(f);
+  const s = Math.floor(fr/tb);
+  return p2(Math.floor(s/3600))+':'+p2(Math.floor(s/60)%60)+':'+p2(s%60)+':'+p2(fr%tb);
+}
+
+/* ============================ parseo ============================ */
+const TC_LINE = /(\d{1,2}:\d{2}:\d{2}(?:[:,.]\d{1,3})?)\s*(?:-->|\s-\s|\s–\s)\s*(\d{1,2}:\d{2}:\d{2}(?:[:,.]\d{1,3})?)/;
+const MARK_RE  = /\*\*\s*(ALE|EVO)\s*\*\*/i;
+
+function parseTranscript(raw){
+  raw = raw.replace(/^﻿/, '').replace(/\r/g, '');
+  const blocks = raw.trim().split(/\n\s*\n+/);
+  const cues = [], marks = new Map();
+  let pending = null;
+
+  for (const block of blocks){
+    const lines = block.split('\n').filter(l => l.trim() !== '');
+    if (!lines.length) continue;
+
+    // marcadores dentro del bloque
+    let sp = null;
+    const kept = [];
+    for (const l of lines){
+      const m = l.match(MARK_RE);
+      if (m){
+        sp = m[1].toUpperCase();
+        const rest = l.replace(MARK_RE, '').trim();
+        if (rest) kept.push(rest);           // marcador pegado al texto
+      } else kept.push(l);
+    }
+    if (sp) pending = sp;
+    if (!kept.length) continue;
+
+    const tcIdx = kept.findIndex(l => TC_LINE.test(l));
+    if (tcIdx < 0) continue;                 // bloque sin timecode: encabezado, número suelto…
+    const m = kept[tcIdx].match(TC_LINE);
+
+    let texto = kept.slice(tcIdx+1).join(' ').trim();
+    // etiquetas manuales tipo "CLIP 1", "Inicia intro:"
+    texto = texto.replace(/^\s*(inicio de |inicia |fin del |fin )?(clip|intro|fragmento)s?\s*\d*\s*:?\s*/i, '').trim();
+    if (!texto) continue;
+
+    if (pending) marks.set(cues.length, pending), pending = null;
+    cues.push({
+      ini: toSec(m[1]), fin: toSec(m[2]), texto,
+      raw: kept.slice(tcIdx).join('\n')      // se reescribe tal cual al exportar
+    });
+  }
+  if (!cues.length) return parseFlat(raw);   // transcripciones con un solo timecode por línea
+  return {cues, marks, auto: []};
+}
+
+/* Formato plano (Premiere, Descript, YouTube, Whisper):
+     Speaker 1
+     00:00:04
+     texto…
+   Se normaliza a bloques con rango para que 07-srt_tools.py lo lea igual. */
+function parseFlat(raw){
+  const lines = raw.replace(/\r/g,'').split('\n');
+  const SOLO_TC = /^\s*[\[(]?(\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?)[\])]?\s*$/;
+  const TC_TEXTO = /^\s*[\[(]?(\d{1,2}:\d{2}:\d{2}(?:[.,]\d{1,3})?)[\])]?\s+(\S.*)$/;
+  const items = [], marks = new Map(), auto = [];
+  let pend = null, pendName = null;
+
+  /* Pasada previa: cualquier línea corta que se repita justo antes de un timecode es una
+     etiqueta de hablante, se llame "Speaker 1", "Desconocido", "Ale" o lo que sea. Así no
+     depende de una lista de palabras y nunca se cuela dentro del texto. */
+  const cand = new Map();
+  for (let i = 0; i < lines.length - 1; i++){
+    const a = lines[i].trim();
+    if (!a || a.length > 28 || a.split(/\s+/).length > 3) continue;
+    let j = i + 1; while (j < lines.length && !lines[j].trim()) j++;
+    if (j < lines.length && (SOLO_TC.test(lines[j]) || TC_TEXTO.test(lines[j])))
+      cand.set(a, (cand.get(a) || 0) + 1);
+  }
+  const etiquetas = new Set([...cand].filter(([, n]) => n >= 3).map(([k]) => k));
+
+  for (let l of lines){
+    if (!l.trim()) continue;
+    const mk = l.match(MARK_RE);
+    if (mk){ pendName = mk[1].toUpperCase(); l = l.replace(MARK_RE,'').trim(); if (!l) continue; }
+    let m;
+    if ((m = l.match(SOLO_TC))){ pend = m[1]; continue; }
+    if ((m = l.match(TC_TEXTO))){
+      items.push({t: toSec(m[1]), texto: m[2].trim(), spk: pendName});
+      pendName = null; pend = null; continue;
+    }
+    const nombre = etiquetas.has(l.trim()) ? l.trim() : nombreDeHablante(l);
+    if (nombre && pend === null){ pendName = nombre; continue; }
+    if (pend !== null){ items.push({t: toSec(pend), texto: l.trim(), spk: pendName}); pendName = null; pend = null; }
+    else if (items.length) items[items.length-1].texto += ' ' + l.trim();
+  }
+  if (!items.length) return {cues: [], marks, auto};
+
+  const stamp = s => p2(Math.floor(s/3600))+':'+p2(Math.floor(s/60)%60)+':'+p2(Math.floor(s)%60)+','+
+                     String(Math.round((s%1)*1000)).padStart(3,'0');
+  const cues = items.map((it, i) => {
+    const fin = i+1 < items.length ? Math.max(it.t + 0.4, items[i+1].t) : it.t + 4;
+    return {ini: it.t, fin, texto: it.texto, raw: stamp(it.t)+' --> '+stamp(fin)+'\n'+it.texto};
+  });
+  items.forEach((it, i) => {
+    if (!it.spk) return;
+    if (it.spk === 'ALE' || it.spk === 'EVO') marks.set(i, it.spk);
+    else auto.push({i, name: it.spk});
+  });
+  return {cues, marks, auto};
+}
+function nombreDeHablante(l){
+  const t = l.trim();
+  if (t.length > 28 || t.split(/\s+/).length > 3) return null;
+  let m = t.match(/^(speaker|hablante|locutor|spk|voz)\s*[\d]*$/i);
+  if (m) return t.replace(/\s+/g,' ');
+  m = t.match(/^([^\s:][^:]{0,25}):$/);
+  if (m) return m[1].trim();
+  if (/^[A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ .]{1,24}$/.test(t) && !/[.]{2}/.test(t)) return t;
+  return null;
+}
+
+/* ============================ turnos ============================ */
+function markIdx(){ return [...S.marks.keys()].sort((a,b)=>a-b); }
+
+function speakerAt(i){
+  let sp = null;
+  for (const k of markIdx()){ if (k <= i) sp = S.marks.get(k); else break; }
+  return sp;
+}
+
+/** turnos consolidados: fusiona marcas seguidas de la misma voz */
+function turns(){
+  const idx = markIdx(), out = [];
+  for (let n = 0; n < idx.length; n++){
+    const a = idx[n], sp = S.marks.get(a);
+    const b = (n+1 < idx.length ? idx[n+1] : S.cues.length) - 1;
+    if (out.length && out[out.length-1].sp === sp) out[out.length-1].b = b;
+    else out.push({a, b, sp});
+  }
+  return out.map(t => ({
+    ...t,
+    ini: S.cues[t.a].ini,
+    fin: S.cues[t.b].fin,
+    hablado: S.cues.slice(t.a, t.b+1).reduce((s,c)=>s + Math.max(0, c.fin-c.ini), 0)
+  }));
+}
+
+/* ============================ render ============================ */
+function renderDoc(){
+  if (!S.cues.length) return;
+  let h = '';
+  for (let i = 0; i < S.cues.length; i++){
+    if (S.marks.has(i)) h += turnHead(i, S.marks.get(i));
+    h += '<span class="cue" data-i="'+i+'">'+esc(S.cues[i].texto)+'</span> ';
+  }
+  el.doc.innerHTML = h;
+  paintAll();
+  el.empty && el.empty.remove();
+}
+function turnHead(i, sp){
+  return '<div class="turn" id="h'+i+'">'+
+    '<span class="badge '+sp+'">'+sp+'</span>'+
+    '<span class="tc">'+hms(S.cues[i].ini)+'</span>'+
+    '<button class="del" data-del="'+i+'" title="Quitar esta marca">✕</button>'+
+  '</div>';
+}
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function paintAll(){
+  const nodes = el.doc.querySelectorAll('.cue');
+  let sp = null, k = 0, idx = markIdx();
+  for (let i = 0; i < nodes.length; i++){
+    while (k < idx.length && idx[k] === i){ sp = S.marks.get(idx[k]); k++; }
+    nodes[i].className = 'cue' + (sp ? ' ' + sp : '');
+  }
+  markCursor(); markNow();
+}
+let curNode = null, nowNode = null;
+function markCursor(){
+  if (curNode) curNode.classList.remove('cursor');
+  curNode = el.doc.querySelector('.cue[data-i="'+S.cur+'"]');
+  if (curNode) curNode.classList.add('cursor');
+}
+function markNow(){
+  if (nowNode) nowNode.classList.remove('now');
+  nowNode = S.now >= 0 ? el.doc.querySelector('.cue[data-i="'+S.now+'"]') : null;
+  if (nowNode) nowNode.classList.add('now');
+}
+
+/* ---------- mapa + estadísticas ---------- */
+function renderStats(){
+  const T = turns(), total = S.dur || 1;
+
+  // mapa
+  el.map.querySelectorAll('.seg').forEach(n => n.remove());
+  const frag = document.createDocumentFragment();
+  for (const t of T){
+    const d = document.createElement('div');
+    d.className = 'seg ' + t.sp;
+    d.style.left  = (t.ini/total*100) + '%';
+    d.style.width = Math.max(0.08, (t.fin - t.ini)/total*100) + '%';
+    d.title = t.sp + '  ' + hms(t.ini) + ' → ' + hms(t.fin);
+    frag.appendChild(d);
+  }
+  el.map.insertBefore(frag, el.playhead);
+  el.mapEnd.textContent = hms(S.dur);
+
+  // reparto sobre tiempo hablado
+  let a = 0, e = 0, all = 0;
+  for (const c of S.cues) all += Math.max(0, c.fin - c.ini);
+  for (const t of T){ if (t.sp === 'ALE') a += t.hablado; else e += t.hablado; }
+  const n = Math.max(0, all - a - e), base = all || 1;
+  el.split.innerHTML =
+    '<i class="a" style="width:'+(a/base*100)+'%"></i>'+
+    '<i class="e" style="width:'+(e/base*100)+'%"></i>'+
+    '<i class="n" style="width:'+(n/base*100)+'%"></i>';
+  const pct = x => Math.round(x/base*100) + '%';
+  el.pctA.textContent = pct(a); el.pctE.textContent = pct(e); el.pctN.textContent = pct(n);
+
+  el.stTurns.textContent = T.length;
+  el.stCues.textContent  = S.cues.length;
+  el.stDur.textContent   = hms(S.dur);
+  const mn = T.length ? T.reduce((m,t) => Math.min(m, t.fin - t.ini), 1e9) : 0;
+  el.stMin.textContent = T.length ? mn.toFixed(1) + 's' : '—';
+
+  renderWarns(T, a, e, n, base);
+}
+
+function renderWarns(T, a, e, n, base){
+  const w = [];
+  if (!S.cues.length){ el.warns.innerHTML = ''; return; }
+
+  const nombres = [...new Set(S.auto.map(x => x.name))];
+  if (nombres.length === 1 && !S.marks.size){
+    w.push(['w', 'Tu transcripción trae <b>«'+esc(nombres[0])+'»</b> en todos los bloques: no separó las voces. '+
+      'Ya la quité del texto para que no te ensucie el mapa, pero quién habla lo tienes que marcar tú aquí '+
+      'oyendo el episodio. Es el trabajo de una pasada.']);
+  }
+  if (nombres.length === 2 && !S.marks.size){
+    w.push(['o', 'La transcripción ya trae los hablantes separados: <b>«'+esc(nombres[0])+'»</b> y <b>«'+esc(nombres[1])+'»</b>. '+
+      '¿Quién es quién?<br><br>'+
+      '<button data-auto="0" style="margin-right:6px">«'+esc(nombres[0])+'» es Ale</button>'+
+      '<button data-auto="1">«'+esc(nombres[0])+'» es Evo</button>']);
+    el.warns.innerHTML = w.map(x => '<div class="warn '+x[0]+'">'+x[1]+'</div>').join('');
+    return;
+  }
+
+  const firstMark = markIdx()[0];
+  if (firstMark === undefined)
+    w.push(['w', 'Todavía no has marcado nada. Dale ▶︎ y aprieta <kbd>A</kbd> o <kbd>E</kbd> en el primer cambio de voz.']);
+  else if (firstMark > 0)
+    w.push(['w', 'Las primeras <b>'+firstMark+'</b> líneas quedan sin dueño (antes de la primera marca). '+
+                 '<a data-go="0">Ir al comienzo</a> y marcar quién arranca.']);
+
+  const cortos = T.filter(t => (t.fin - t.ini) < 0.8);
+  if (cortos.length)
+    w.push(['w', '<b>'+cortos.length+'</b> turno(s) de menos de 1 segundo. Suele ser una marca puesta de más — '+
+                 'revisa con <a data-go="'+cortos[0].a+'">el primero</a>.']);
+
+  if (T.length){
+    const pa = a/(a+e||1);
+    if (pa > 0.75 || pa < 0.25)
+      w.push(['w', 'El reparto va <b>'+Math.round(pa*100)+'% / '+Math.round(100-pa*100)+'%</b>. '+
+                   'Puede ser real, pero si es un error de marcado el ping-pong del mapa saldrá torcido.']);
+  }
+
+  if (n/base > 0.02 && firstMark !== undefined)
+    w.push(['w', 'Queda un <b>'+Math.round(n/base*100)+'%</b> del episodio sin marcar. <a data-gap="1">Ir al primer hueco</a>.']);
+
+  if (T.length >= 2 && n/base <= 0.02 && firstMark === 0)
+    w.push(['o', '✓ Episodio marcado de punta a punta. Exporta la transcripción marcada.']);
+
+  el.warns.innerHTML = w.map(x => '<div class="warn '+x[0]+'">'+x[1]+'</div>').join('');
+}
+
+/* ============================ acciones ============================ */
+function target(){                       // dónde cae la marca
+  return (el.v.src && !el.v.paused && S.now >= 0) ? S.now : S.cur;
+}
+function setMark(i, sp, silent){
+  if (!S.cues.length) return;
+  i = Math.max(0, Math.min(S.cues.length-1, i));
+  const prev = S.marks.has(i) ? S.marks.get(i) : null;
+  if (prev === sp) return;
+  S.undo.push({i, prev});
+  if (sp) S.marks.set(i, sp); else S.marks.delete(i);
+  S.lastMark = sp ? i : null;
+  S.cur = i;
+  refreshHead(i, prev);
+  paintAll();
+  renderStats(); dirty();
+  if (!silent) toast(sp ? (sp === 'ALE' ? 'Ale' : 'Evo') + ' desde ' + hms(S.cues[i].ini) : 'Marca quitada');
+}
+function prevMarkOrZero(i){
+  const idx = markIdx().filter(k => k < i);
+  return idx.length ? idx[idx.length-1] : 0;
+}
+function refreshHead(i, prev){
+  const old = document.getElementById('h'+i);
+  if (old) old.remove();
+  if (S.marks.has(i)){
+    const node = el.doc.querySelector('.cue[data-i="'+i+'"]');
+    if (node) node.insertAdjacentHTML('beforebegin', turnHead(i, S.marks.get(i)));
+  }
+}
+function undo(){
+  const u = S.undo.pop();
+  if (!u){ toast('Nada que deshacer'); return; }
+  const cur = S.marks.has(u.i) ? S.marks.get(u.i) : null;
+  if (u.prev) S.marks.set(u.i, u.prev); else S.marks.delete(u.i);
+  refreshHead(u.i, cur);
+  paintAll();
+  renderStats(); dirty(); toast('Deshecho');
+}
+function moveMark(dir){
+  const i = S.lastMark !== null && S.marks.has(S.lastMark) ? S.lastMark : lastMarkBefore(S.cur);
+  if (i === null){ toast('No hay marca que mover'); return; }
+  const j = i + dir;
+  if (j < 0 || j >= S.cues.length || S.marks.has(j)) return;
+  const sp = S.marks.get(i);
+  S.undo.push({i, prev: sp});
+  S.marks.delete(i); S.marks.set(j, sp);
+  S.lastMark = j; S.cur = j;
+  refreshHead(i, sp); refreshHead(j, null);
+  paintAll();
+  renderStats(); dirty(); seek(S.cues[j].ini);
+}
+function lastMarkBefore(i){
+  const idx = markIdx().filter(k => k <= i);
+  return idx.length ? idx[idx.length-1] : null;
+}
+function gotoGap(){
+  const idx = markIdx();
+  if (!idx.length){ goCue(0); return; }
+  if (idx[0] > 0){ goCue(0); toast('El arranque está sin marcar'); return; }
+  // hueco = zona larga sin cambio de marca al final del marcado
+  const last = idx[idx.length-1];
+  if (last < S.cues.length - 1){ goCue(last); toast('Última marca puesta — sigue desde aquí'); }
+  else toast('No quedan huecos');
+}
+function goCue(i){
+  S.cur = Math.max(0, Math.min(S.cues.length-1, i));
+  markCursor();
+  const node = el.doc.querySelector('.cue[data-i="'+S.cur+'"]');
+  if (node) node.scrollIntoView({block:'center'});
+  seek(S.cues[S.cur].ini);
+}
+function seek(t){ if (el.v.src){ el.v.currentTime = Math.max(0, t); } }
+
+/* ============================ reproductor ============================ */
+function findCue(t){
+  let lo = 0, hi = S.cues.length - 1, r = -1;
+  while (lo <= hi){
+    const m = (lo+hi) >> 1;
+    if (S.cues[m].ini <= t){ r = m; lo = m+1; } else hi = m-1;
+  }
+  return r;
+}
+let raf = null;
+function tick(){
+  if (el.v.src && S.cues.length){
+    const t = el.v.currentTime;
+    el.clock.textContent = hms(t);
+    el.playhead.style.left = (S.dur ? Math.min(100, t/S.dur*100) : 0) + '%';
+    const i = findCue(t);
+    if (i !== S.now){
+      S.now = i; markNow();
+      if (el.follow.checked && nowNode && !el.v.paused) nowNode.scrollIntoView({block:'center'});
+    }
+  }
+  raf = requestAnimationFrame(tick);
+}
+
+/* ============================ exportar ============================ */
+function download(name, text, mime){
+  const b = new Blob([text], {type: (mime||'text/plain') + ';charset=utf-8'});
+  const u = URL.createObjectURL(b);
+  el.dl.href = u; el.dl.download = name; el.dl.click();
+  setTimeout(() => URL.revokeObjectURL(u), 4000);
+}
+const cap = () => (el.cCap.value || '').trim().replace(/[^\w-]/g,'') || 'N';
+
+function exportTxt(){
+  if (!S.cues.length) return toast('Carga primero la transcripción');
+  const T = turns();
+  const head =
+    '# Transcripción marcada — CAP ' + cap() + '\n' +
+    '# Fuente: ' + (S.transName || '—') + ' · duración ' + hms(S.dur) + ' · ' + S.cues.length + ' líneas\n' +
+    '# Voces: **ALE** = Alejandra (etiqueta mango en Premiere) · **EVO** = Evonny (etiqueta rosa)\n' +
+    '# El marcador manda hasta el siguiente marcador. ' + T.length + ' turnos marcados.\n';
+  let out = head + '\n';
+  for (let i = 0; i < S.cues.length; i++){
+    if (S.marks.has(i)) out += '**' + S.marks.get(i) + '**\n\n';
+    out += S.cues[i].raw + '\n\n';
+  }
+  download('cap-' + cap() + '-marcado.txt', out);
+  clean();
+}
+
+function exportXml(){
+  const T = turns();
+  if (!T.length) return toast('Marca al menos un turno');
+  const F = fps(), f = F.r;
+  const off = tcFrames(el.cStart.value || '00:00:00:00', f);
+  const twoTracks = el.cMode.value === '2';
+  const path = (el.cPath.value || '').trim();
+  const name = path.split('/').pop() || S.mediaName || S.transName.replace(/\.[^.]+$/, '') + '.mp4';
+  const url = path
+    ? 'file://' + encodeURI(path.startsWith('/') ? path : '/' + path)
+    : 'file://localhost/' + encodeURI(name);
+
+  // bloques sin solapes, mínimo 1 frame
+  const B = [];
+  for (let n = 0; n < T.length; n++){
+    let a = Math.round(T[n].ini * f) - off;
+    let b = Math.round(T[n].fin * f) - off;
+    if (n+1 < T.length) b = Math.min(b, Math.round(T[n+1].ini * f) - off);
+    a = Math.max(0, a); b = Math.max(a+1, b);
+    B.push({a, b, sp: T[n].sp});
+  }
+  const total = Math.max(B[B.length-1].b, Math.round(S.dur * f) - off);
+  const W = el.v.videoWidth || 1920, H = el.v.videoHeight || 1080;
+  const rate = '<rate><timebase>'+F.tb+'</timebase><ntsc>'+F.ntsc+'</ntsc></rate>';
+  const sc = '<samplecharacteristics>'+rate+'<width>'+W+'</width><height>'+H+'</height>'+
+             '<anamorphic>FALSE</anamorphic><pixelaspectratio>square</pixelaspectratio>'+
+             '<fielddominance>none</fielddominance></samplecharacteristics>';
+  let fileDone = false;
+  const fileTag = () => {
+    if (fileDone) return '<file id="f1"/>';
+    fileDone = true;
+    return '<file id="f1"><name>'+esc(name)+'</name><pathurl>'+esc(url)+'</pathurl>'+rate+
+      '<duration>'+total+'</duration>'+
+      '<timecode>'+rate+'<string>'+framesToTC(off, f)+'</string><frame>'+off+'</frame>'+
+      '<displayformat>NDF</displayformat></timecode>'+
+      '<media><video>'+sc+'</video><audio><samplecharacteristics><depth>16</depth>'+
+      '<samplerate>48000</samplerate></samplecharacteristics><channelcount>2</channelcount></audio></media></file>';
+  };
+  const clip = (b, n) => '<clipitem id="c'+n+'"><name>'+b.sp+'</name>'+rate+
+    '<duration>'+total+'</duration><start>'+b.a+'</start><end>'+b.b+'</end>'+
+    '<in>'+b.a+'</in><out>'+b.b+'</out><enabled>TRUE</enabled>'+fileTag()+
+    '<labels><label2>'+(b.sp==='ALE'?'Mango':'Rose')+'</label2></labels>'+
+    '<comments><mastercomment1>'+b.sp+'</mastercomment1></comments></clipitem>';
+
+  const track = items => '<track><enabled>TRUE</enabled><locked>FALSE</locked>'+items+'</track>';
+  let n = 0, tracks = '';
+  tracks += track('<clipitem id="cbase"><name>'+esc(name)+' (bruto)</name>'+rate+
+      '<duration>'+total+'</duration><start>0</start><end>'+total+'</end><in>0</in><out>'+total+'</out>'+
+      '<enabled>TRUE</enabled>'+fileTag()+'</clipitem>');
+  if (twoTracks){
+    tracks += track(B.filter(b=>b.sp==='ALE').map(b=>clip(b,++n)).join(''));
+    tracks += track(B.filter(b=>b.sp==='EVO').map(b=>clip(b,++n)).join(''));
+  } else {
+    tracks += track(B.map(b=>clip(b,++n)).join(''));
+  }
+
+  const markers = B.map(b =>
+    '<marker><name>'+b.sp+'</name><comment>'+b.sp+' · '+framesToTC(b.a+off,f)+'</comment>'+
+    '<in>'+b.a+'</in><out>-1</out></marker>').join('');
+
+  const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n<xmeml version="4">\n'+
+    '<sequence id="seq-hablantes"><uuid>'+uuid()+'</uuid>'+
+    '<name>CAP '+cap()+' — quién habla</name><duration>'+total+'</duration>'+rate+
+    '<timecode>'+rate+'<string>'+framesToTC(off,f)+'</string><frame>'+off+'</frame>'+
+    '<displayformat>NDF</displayformat></timecode>'+
+    '<media><video><format>'+sc+'</format>'+tracks+'</video></media>'+
+    markers+'</sequence>\n</xmeml>\n';
+
+  download('cap-' + cap() + '-hablantes.xml', xml, 'application/xml');
+}
+function uuid(){
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random()*16|0; return (c === 'x' ? r : (r&0x3|0x8)).toString(16);
+  });
+}
+
+function exportCsv(){
+  const T = turns();
+  if (!T.length) return toast('Marca al menos un turno');
+  const f = fps().r, off = tcFrames(el.cStart.value || '00:00:00:00', f);
+  let out = 'n,voz,etiqueta_premiere,in_tc,out_tc,in_seg,out_seg,duracion_seg,texto\n';
+  T.forEach((t,i) => {
+    const txt = S.cues.slice(t.a, t.b+1).map(c=>c.texto).join(' ').replace(/"/g,'""');
+    out += [i+1, t.sp, t.sp==='ALE'?'Mango':'Rose',
+            framesToTC(Math.round(t.ini*f)+off, f), framesToTC(Math.round(t.fin*f)+off, f),
+            t.ini.toFixed(3), t.fin.toFixed(3), (t.fin-t.ini).toFixed(2),
+            '"'+txt+'"'].join(',') + '\n';
+  });
+  download('cap-' + cap() + '-hablantes.csv', out, 'text/csv');
+}
+
+function exportSrt(){
+  const T = turns();
+  if (!T.length) return toast('Marca al menos un turno');
+  const stamp = s => hms(s) + ',' + String(Math.round((s%1)*1000)).padStart(3,'0');
+  let out = '';
+  T.forEach((t,i) => {
+    out += (i+1) + '\n' + stamp(t.ini) + ' --> ' + stamp(t.fin) + '\n' + t.sp + '\n\n';
+  });
+  download('cap-' + cap() + '-hablantes.srt', out, 'text/plain');
+}
+
+/* ---------- avance ---------- */
+function saveState(){
+  if (!S.cues.length) return toast('Nada que guardar');
+  const data = {
+    v: 1, cap: el.cCap.value, transName: S.transName, mediaName: S.mediaName,
+    cues: S.cues.length, dur: S.dur,
+    fps: el.cFps.value, startTC: el.cStart.value, path: el.cPath.value,
+    marks: [...S.marks.entries()]
+  };
+  download('cap-' + cap() + '-avance.json', JSON.stringify(data), 'application/json');
+  clean();
+}
+function loadState(data){
+  if (!S.cues.length) return toast('Carga primero la transcripción');
+  if (data.cues !== S.cues.length && !confirm(
+      'Ese avance se guardó sobre una transcripción de ' + data.cues + ' líneas y esta tiene ' +
+      S.cues.length + '. Las marcas pueden caer corridas. ¿Cargarlo igual?')) return;
+  S.marks = new Map(data.marks.map(([k,v]) => [+k, v]));
+  S.undo = [];
+  if (data.cap) el.cCap.value = data.cap;
+  if (data.fps) el.cFps.value = data.fps;
+  if (data.startTC) el.cStart.value = data.startTC;
+  if (data.path) el.cPath.value = data.path;
+  renderDoc(); renderStats(); clean();
+  toast('Avance cargado: ' + S.marks.size + ' marcas');
+}
+
+/* ============================ util UI ============================ */
+let tt;
+function toast(m){
+  el.toast.innerHTML = m; el.toast.classList.add('show');
+  clearTimeout(tt); tt = setTimeout(() => el.toast.classList.remove('show'), 1700);
+}
+function dirty(){
+  S.dirty = true;
+  el.saveState.textContent = 'sin guardar';
+  el.saveState.className = 'pill';
+  el.saveState.style.color = 'var(--warn)';
+}
+function clean(){
+  S.dirty = false;
+  const d = new Date();
+  el.saveState.textContent = 'guardado ' + p2(d.getHours()) + ':' + p2(d.getMinutes());
+  el.saveState.className = 'pill on';
+  el.saveState.style.color = '';
+}
+
+/* ============================ eventos ============================ */
+document.getElementById('fTrans').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    const {cues, marks, auto} = parseTranscript(r.result);
+    if (!cues.length){
+      alert('No pude leer timecodes en ese archivo.\n\nEsperaba líneas tipo:\n  00:22:40,120 --> 00:22:43,000\no\n  00:22:40:13 - 00:22:43:02');
+      return;
+    }
+    S.cues = cues; S.marks = marks; S.undo = []; S.cur = 0; S.now = -1; S.auto = auto || [];
+    S.transName = f.name; S.dur = cues[cues.length-1].fin;
+    el.pTrans.textContent = f.name + ' · ' + cues.length + ' líneas';
+    el.pTrans.className = 'pill on';
+    const m = f.name.match(/(\d{1,3})/);
+    if (m && !el.cCap.value) el.cCap.value = m[1];
+    renderDoc(); renderStats(); clean();
+    if (marks.size) toast('Traía ' + marks.size + ' marcas: las cargué');
+  };
+  r.readAsText(f, 'utf-8');
+});
+
+document.getElementById('fMedia').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  el.v.src = URL.createObjectURL(f);
+  el.v.style.display = 'block';
+  document.getElementById('noMedia').style.display = 'none';
+  S.mediaName = f.name;
+  el.pMedia.textContent = f.name;
+  el.pMedia.className = 'pill on';
+  if (!el.cPath.value) el.cPath.placeholder = '/ruta/…/' + f.name;
+  el.v.addEventListener('error', () => {
+    toast('El navegador no puede reproducir ese archivo (¿ProRes?). Prueba con un MP4 H.264 o con el audio.');
+  }, {once:true});
+});
+
+document.getElementById('fState').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { try { loadState(JSON.parse(r.result)); } catch(_){ alert('Ese .json no es un avance válido.'); } };
+  r.readAsText(f);
+  e.target.value = '';
+});
+
+el.doc.addEventListener('click', e => {
+  const del = e.target.closest('[data-del]');
+  if (del){ setMark(+del.dataset.del, null); return; }
+  const c = e.target.closest('.cue');
+  if (c){ S.cur = +c.dataset.i; markCursor(); seek(S.cues[S.cur].ini); }
+});
+el.warns.addEventListener('click', e => {
+  const g = e.target.closest('[data-go]');   if (g) return goCue(+g.dataset.go);
+  const p = e.target.closest('[data-gap]');  if (p) return gotoGap();
+  const a = e.target.closest('[data-auto]');
+  if (a){
+    const nombres = [...new Set(S.auto.map(x => x.name))];
+    const mapa = {}; mapa[nombres[0]] = a.dataset.auto === '0' ? 'ALE' : 'EVO';
+    mapa[nombres[1]] = a.dataset.auto === '0' ? 'EVO' : 'ALE';
+    S.marks = new Map(); S.undo = [];
+    let ult = null;
+    for (const x of S.auto){ if (mapa[x.name] !== ult){ S.marks.set(x.i, mapa[x.name]); ult = mapa[x.name]; } }
+    renderDoc(); renderStats(); dirty();
+    toast(S.marks.size + ' turnos asignados — revísalos oyendo el episodio');
+  }
+});
+el.map.addEventListener('click', e => {
+  const r = el.map.getBoundingClientRect();
+  const t = (e.clientX - r.left) / r.width * S.dur;
+  seek(t);
+  const i = findCue(t); if (i >= 0){ S.cur = i; markCursor(); }
+});
+
+document.getElementById('bAle').onclick  = () => setMark(target(), 'ALE');
+document.getElementById('bEvo').onclick  = () => setMark(target(), 'EVO');
+document.getElementById('bDel').onclick  = () => setMark(target(), null);
+document.getElementById('bUndo').onclick = undo;
+document.getElementById('bPrevMark').onclick = () => moveMark(-1);
+document.getElementById('bNextMark').onclick = () => moveMark(1);
+document.getElementById('bGap').onclick  = gotoGap;
+document.getElementById('bPlay').onclick = playPause;
+document.getElementById('bBack').onclick = () => seek(el.v.currentTime - 3);
+document.getElementById('bFwd').onclick  = () => seek(el.v.currentTime + 3);
+document.getElementById('bSave').onclick = saveState;
+document.getElementById('xTxt').onclick  = exportTxt;
+document.getElementById('xXml').onclick  = exportXml;
+document.getElementById('xCsv').onclick  = exportCsv;
+document.getElementById('xSrt').onclick  = exportSrt;
+el.rate.onchange = () => { el.v.playbackRate = +el.rate.value; };
+el.v.addEventListener('play',  () => document.getElementById('bPlay').textContent = '❚❚');
+el.v.addEventListener('pause', () => document.getElementById('bPlay').textContent = '▶︎');
+
+function playPause(){
+  if (!el.v.src) return toast('Carga el video o el audio del bruto');
+  el.v.paused ? el.v.play() : el.v.pause();
+}
+
+document.addEventListener('keydown', e => {
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z'){ e.preventDefault(); return undo(); }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  const map = {' ':playPause, a:()=>setMark(target(),'ALE'), e:()=>setMark(target(),'EVO'),
+               x:()=>setMark(target(),null), g:gotoGap, s:saveState,
+               '[':()=>moveMark(-1), ']':()=>moveMark(1),
+               arrowleft:()=>seek(el.v.currentTime-3), arrowright:()=>seek(el.v.currentTime+3),
+               arrowup:()=>goCue(S.cur-1), arrowdown:()=>goCue(S.cur+1)};
+  const speeds = {'1':0.75,'2':1,'3':1.25,'4':1.5,'5':1.75,'6':2};
+  if (speeds[k]){ e.preventDefault(); el.rate.value = speeds[k]; el.v.playbackRate = speeds[k]; return toast(speeds[k]+'×'); }
+  const fn = map[e.key === ' ' ? ' ' : k];
+  if (fn){ e.preventDefault(); fn(); }
+});
+
+window.addEventListener('beforeunload', e => {
+  if (S.dirty && S.marks.size){ e.preventDefault(); e.returnValue = ''; }
+});
+
+tick();
+
+/* expuesto para pruebas automatizadas */
+window.__app = {S, parseTranscript, setMark, turns, exportXml, exportTxt,
+  _build:{toSec, hms, tcFrames, framesToTC}};
+})();
+</script>
+</body>
+</html>
