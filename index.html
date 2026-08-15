@@ -124,6 +124,12 @@
   .cue:hover{background:#24243050;text-decoration:underline;text-decoration-color:#4a4a5e}
   .cue.now{background:#FFFFFF;color:#0E0E12 !important;border-radius:4px;box-shadow:0 0 0 2px #fff}
   .cue.cursor{box-shadow:inset 0 -2px 0 var(--ok)}
+  .w{cursor:pointer;border-radius:3px}
+  .w:hover{box-shadow:inset 2px 0 0 var(--ok);background:#ffffff14}
+  .w.cw{box-shadow:inset 2px 0 0 var(--ok)}
+  .hint{display:inline-block;width:3px;height:.95em;background:#50506a;border-radius:2px;
+    margin:0 5px -1px;vertical-align:-1px;cursor:pointer}
+  .hint:hover{background:var(--ok)}
 
   #empty{color:var(--muted);text-align:center;padding:14vh 20px;line-height:1.8}
   #empty h3{color:var(--txt);font-size:19px;margin:0 0 8px}
@@ -202,7 +208,15 @@
         <button id="bNextMark" class="grow" title="]">mover marca ▶</button>
       </div>
       <div class="row tight" style="margin-top:8px">
-        <button id="bGap" class="grow">⏭ Ir al primer hueco sin marcar</button>
+        <button id="bSplit" class="grow">✂ Dividir aquí <kbd>D</kbd></button>
+        <button id="bHint" class="grow">⏭ Cambio de turno <kbd>N</kbd></button>
+      </div>
+      <div class="row tight" style="margin-top:8px">
+        <button id="bGap" class="grow">Ir al primer hueco sin marcar</button>
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-top:9px;line-height:1.45">
+        Si en una misma línea termina una y empieza la otra, haz clic en <b>la palabra donde arranca
+        la otra</b> y aprieta <kbd>A</kbd> o <kbd>E</kbd>: parte la línea ahí y marca de una.
       </div>
     </div>
 
@@ -281,6 +295,8 @@
         <kbd>↑ ↓</kbd><span>línea anterior / siguiente</span>
         <kbd>[ ]</kbd><span>mover la última marca una línea</span>
         <kbd>1…6</kbd><span>velocidad de reproducción</span>
+        <kbd>D</kbd><span>partir la línea en la palabra del cursor</span>
+        <kbd>N</kbd><span>saltar al siguiente cambio de turno</span>
         <kbd>G</kbd><span>ir al primer hueco sin marcar</span>
         <kbd>S</kbd><span>guardar avance</span>
         <kbd>⌘Z</kbd><span>deshacer</span>
@@ -318,6 +334,8 @@ const S = {
   now: -1,         // línea que suena
   lastMark: null,  // última marca tocada (para [ y ])
   auto: [],        // hablantes ya separados por la transcripción (Speaker 1/2)
+  hints: new Set(),// dónde la transcripción marcó cambio de turno (aunque no supiera de quién)
+  curW: 0,         // palabra del cursor dentro de la línea
   undo: [],
   transName: '',
   mediaName: '',
@@ -416,7 +434,48 @@ function parseTranscript(raw){
     });
   }
   if (!cues.length) return parseFlat(raw);   // transcripciones con un solo timecode por línea
-  return {cues, marks, auto: []};
+  const auto = [], hints = new Set();
+  limpiarEtiquetas(cues, auto, hints);
+  return {cues, marks, auto, hints};
+}
+
+/* Premiere (y casi todos) pegan el nombre del orador al principio del texto: "Desconocido ¿Tú qué
+   opinas?". Eso no es diálogo y no puede acabar en el mapa. Se detecta por repetición —sirve para
+   "Desconocido", "Speaker 1" o lo que sea—, se recorta del texto, y la posición se guarda: cada vez
+   que aparecía, la transcripción creyó que cambiaba el turno. Eso es una pista útil para marcar. */
+function limpiarEtiquetas(cues, auto, hints){
+  const primeras = new Map();
+  for (const c of cues){
+    for (const n of [1, 2]){
+      const tok = c.texto.split(/\s+/).slice(0, n).join(' ').replace(/[:：]$/, '');
+      if (tok.length < 4 || tok.length > 28) continue;
+      if (!/^[A-ZÁÉÍÓÚÑ¿¡"'(\[]?[A-Za-zÁÉÍÓÚÑáéíóúñ]/.test(tok)) continue;
+      primeras.set(tok, (primeras.get(tok) || 0) + 1);
+    }
+  }
+  const EXPLICITA = /^(desconocido|unknown|desconocida|speaker\s*\d*|hablante\s*\d*|locutor\s*\d*|voz\s*\d*)$/i;
+  const umbral = Math.max(3, Math.round(cues.length * 0.15));
+  let etiqueta = null, mejor = 0;
+  for (const [tok, n] of primeras){
+    const vale = EXPLICITA.test(tok) ? n >= 2 : n >= umbral;
+    if (vale && n > mejor){ etiqueta = tok; mejor = n; }
+  }
+  if (!etiqueta) return;
+  for (let i = 0; i < cues.length; i++){
+    const re = new RegExp('^' + etiqueta.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*[:：]?\\s*', '');
+    if (!re.test(cues[i].texto)) continue;
+    cues[i].texto = cues[i].texto.replace(re, '').trim();
+    cues[i].raw = rawDe(cues[i].ini, cues[i].fin, cues[i].texto);
+    hints.add(i);
+    auto.push({i, name: etiqueta});
+  }
+  // líneas que quedaron vacías al quitar la etiqueta
+  for (let i = cues.length - 1; i >= 0; i--) if (!cues[i].texto) cues.splice(i, 1);
+}
+function rawDe(a, b, texto){
+  const st = s => p2(Math.floor(s/3600))+':'+p2(Math.floor(s/60)%60)+':'+p2(Math.floor(s)%60)+','+
+                  String(Math.round((s%1)*1000)).padStart(3,'0');
+  return st(a) + ' --> ' + st(b) + '\n' + texto;
 }
 
 /* Formato plano (Premiere, Descript, YouTube, Whisper):
@@ -467,12 +526,14 @@ function parseFlat(raw){
     const fin = i+1 < items.length ? Math.max(it.t + 0.4, items[i+1].t) : it.t + 4;
     return {ini: it.t, fin, texto: it.texto, raw: stamp(it.t)+' --> '+stamp(fin)+'\n'+it.texto};
   });
+  const hints = new Set();
   items.forEach((it, i) => {
     if (!it.spk) return;
     if (it.spk === 'ALE' || it.spk === 'EVO') marks.set(i, it.spk);
-    else auto.push({i, name: it.spk});
+    else { auto.push({i, name: it.spk}); hints.add(i); }
   });
-  return {cues, marks, auto};
+  limpiarEtiquetas(cues, auto, hints);
+  return {cues, marks, auto, hints};
 }
 function nombreDeHablante(l){
   const t = l.trim();
@@ -517,7 +578,9 @@ function renderDoc(){
   let h = '';
   for (let i = 0; i < S.cues.length; i++){
     if (S.marks.has(i)) h += turnHead(i, S.marks.get(i));
-    h += '<span class="cue" data-i="'+i+'">'+esc(S.cues[i].texto)+'</span> ';
+    if (S.hints.has(i) && !S.marks.has(i))
+      h += '<i class="hint" data-hint="'+i+'" title="Aquí la transcripción creyó que cambiaba el turno"></i>';
+    h += '<span class="cue" data-i="'+i+'">'+palabras(S.cues[i].texto)+'</span> ';
   }
   el.doc.innerHTML = h;
   paintAll();
@@ -530,6 +593,9 @@ function turnHead(i, sp){
     '<button class="del" data-del="'+i+'" title="Quitar esta marca">✕</button>'+
   '</div>';
 }
+function palabras(t){
+  return t.split(/\s+/).map((w, j) => '<span class="w" data-w="'+j+'">'+esc(w)+'</span>').join(' ');
+}
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 function paintAll(){
@@ -541,11 +607,22 @@ function paintAll(){
   }
   markCursor(); markNow();
 }
-let curNode = null, nowNode = null;
+let curNode = null, nowNode = null, curW = null;
 function markCursor(){
   if (curNode) curNode.classList.remove('cursor');
+  if (curW) curW.classList.remove('cw');
   curNode = el.doc.querySelector('.cue[data-i="'+S.cur+'"]');
   if (curNode) curNode.classList.add('cursor');
+  curW = curNode && S.curW > 0 ? curNode.querySelector('.w[data-w="'+S.curW+'"]') : null;
+  if (curW) curW.classList.add('cw');
+}
+/* tiempo aproximado de una palabra dentro de la línea, repartiendo por caracteres */
+function tiempoDe(i, w){
+  const c = S.cues[i];
+  if (!w) return c.ini;
+  const ws = c.texto.split(/\s+/);
+  const antes = ws.slice(0, w).join(' ').length;
+  return c.ini + (c.fin - c.ini) * (antes / Math.max(1, c.texto.length));
 }
 function markNow(){
   if (nowNode) nowNode.classList.remove('now');
@@ -657,6 +734,67 @@ function setMark(i, sp, silent){
   renderStats(); dirty();
   if (!silent) toast(sp ? (sp === 'ALE' ? 'Ale' : 'Evo') + ' desde ' + hms(S.cues[i].ini) : 'Marca quitada');
 }
+/* Divide la línea i justo antes de la palabra w. El timecode se reparte por caracteres:
+   no es exacto al frame, pero el arranque de la marca sí queda dentro de la frase correcta. */
+function splitCue(i, w){
+  const c = S.cues[i], ws = c.texto.split(/\s+/);
+  if (w <= 0 || w >= ws.length) return false;
+  const a = ws.slice(0, w).join(' '), b = ws.slice(w).join(' ');
+  const t = c.ini + (c.fin - c.ini) * (a.length / Math.max(1, a.length + b.length + 1));
+  S.cues.splice(i, 1,
+    {ini: c.ini, fin: t, texto: a, raw: rawDe(c.ini, t, a)},
+    {ini: t, fin: c.fin, texto: b, raw: rawDe(t, c.fin, b)});
+  correrIndices(i, +1);
+  S.undo.push({type: 'split', i});
+  return true;
+}
+function mergeCues(i){
+  const a = S.cues[i], b = S.cues[i+1];
+  if (!b) return;
+  const txt = (a.texto + ' ' + b.texto).trim();
+  S.cues.splice(i, 2, {ini: a.ini, fin: b.fin, texto: txt, raw: rawDe(a.ini, b.fin, txt)});
+  S.marks.delete(i+1);
+  correrIndices(i, -1);
+}
+function correrIndices(i, d){
+  const m = new Map();
+  for (const [k, v] of S.marks) m.set(k > i ? k + d : k, v);
+  S.marks = m;
+  S.auto = S.auto.map(x => ({...x, i: x.i > i ? x.i + d : x.i}));
+  S.hints = new Set([...S.hints].map(k => k > i ? k + d : k));
+  if (S.cur > i) S.cur += d;
+}
+
+/* Marcar: si el cursor está en una palabra a mitad de línea, primero parte la línea ahí. */
+function marcar(sp){
+  if (!S.cues.length) return;
+  const enVivo = el.v.src && !el.v.paused && S.now >= 0;
+  let i = enVivo ? S.now : S.cur;
+  const w = enVivo ? 0 : S.curW;
+  if (sp && w > 0 && splitCue(i, w)){
+    i = i + 1; S.curW = 0;
+    renderDoc();
+    setMark(i, sp, true);
+    toast('Línea dividida · ' + (sp === 'ALE' ? 'Ale' : 'Evo') + ' desde ' + hms(S.cues[i].ini));
+    return;
+  }
+  S.curW = 0;
+  setMark(i, sp);
+}
+function dividir(){
+  if (!S.curW) return toast('Primero haz clic en la palabra donde empieza la otra');
+  const i = S.cur;
+  if (!splitCue(i, S.curW)) return;
+  S.cur = i + 1; S.curW = 0;
+  renderDoc(); renderStats(); dirty();
+  toast('Dividida en ' + hms(S.cues[S.cur].ini) + ' — ahora marca A o E');
+}
+function siguienteHint(){
+  const h = [...S.hints].sort((a,b) => a-b).find(k => k > S.cur);
+  if (h === undefined) return toast('No hay más cambios de turno marcados');
+  goCue(h);
+}
+
 function prevMarkOrZero(i){
   const idx = markIdx().filter(k => k < i);
   return idx.length ? idx[idx.length-1] : 0;
@@ -672,6 +810,11 @@ function refreshHead(i, prev){
 function undo(){
   const u = S.undo.pop();
   if (!u){ toast('Nada que deshacer'); return; }
+  if (u.type === 'split'){
+    mergeCues(u.i);
+    renderDoc(); renderStats(); dirty(); toast('División deshecha');
+    return;
+  }
   const cur = S.marks.has(u.i) ? S.marks.get(u.i) : null;
   if (u.prev) S.marks.set(u.i, u.prev); else S.marks.delete(u.i);
   refreshHead(u.i, cur);
@@ -706,6 +849,7 @@ function gotoGap(){
 }
 function goCue(i){
   S.cur = Math.max(0, Math.min(S.cues.length-1, i));
+  S.curW = 0;
   markCursor();
   const node = el.doc.querySelector('.cue[data-i="'+S.cur+'"]');
   if (node) node.scrollIntoView({block:'center'});
@@ -871,6 +1015,8 @@ function saveState(){
   const data = {
     v: 1, cap: el.cCap.value, transName: S.transName, mediaName: S.mediaName,
     cues: S.cues.length, dur: S.dur,
+    lineas: S.cues.map(c => [+c.ini.toFixed(3), +c.fin.toFixed(3), c.texto, c.raw]),
+    hints: [...S.hints],
     fps: el.cFps.value, startTC: el.cStart.value, path: el.cPath.value,
     marks: [...S.marks.entries()]
   };
@@ -879,11 +1025,16 @@ function saveState(){
 }
 function loadState(data){
   if (!S.cues.length) return toast('Carga primero la transcripción');
-  if (data.cues !== S.cues.length && !confirm(
+  if (!data.lineas && data.cues !== S.cues.length && !confirm(
       'Ese avance se guardó sobre una transcripción de ' + data.cues + ' líneas y esta tiene ' +
       S.cues.length + '. Las marcas pueden caer corridas. ¿Cargarlo igual?')) return;
+  if (data.lineas){                       // avance con divisiones: manda el guardado
+    S.cues = data.lineas.map(l => ({ini: l[0], fin: l[1], texto: l[2], raw: l[3]}));
+    S.dur = S.cues[S.cues.length-1].fin;
+    S.hints = new Set(data.hints || []);
+  }
   S.marks = new Map(data.marks.map(([k,v]) => [+k, v]));
-  S.undo = [];
+  S.undo = []; S.cur = 0; S.curW = 0;
   if (data.cap) el.cCap.value = data.cap;
   if (data.fps) el.cFps.value = data.fps;
   if (data.startTC) el.cStart.value = data.startTC;
@@ -917,12 +1068,12 @@ document.getElementById('fTrans').addEventListener('change', e => {
   const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
   r.onload = () => {
-    const {cues, marks, auto} = parseTranscript(r.result);
+    const {cues, marks, auto, hints} = parseTranscript(r.result);
     if (!cues.length){
       alert('No pude leer timecodes en ese archivo.\n\nEsperaba líneas tipo:\n  00:22:40,120 --> 00:22:43,000\no\n  00:22:40:13 - 00:22:43:02');
       return;
     }
-    S.cues = cues; S.marks = marks; S.undo = []; S.cur = 0; S.now = -1; S.auto = auto || [];
+    S.cues = cues; S.marks = marks; S.undo = []; S.cur = 0; S.now = -1; S.auto = auto || []; S.hints = hints || new Set(); S.curW = 0;
     S.transName = f.name; S.dur = cues[cues.length-1].fin;
     el.pTrans.textContent = f.name + ' · ' + cues.length + ' líneas';
     el.pTrans.className = 'pill on';
@@ -959,8 +1110,17 @@ document.getElementById('fState').addEventListener('change', e => {
 el.doc.addEventListener('click', e => {
   const del = e.target.closest('[data-del]');
   if (del){ setMark(+del.dataset.del, null); return; }
+  const hint = e.target.closest('[data-hint]');
+  if (hint){ goCue(+hint.dataset.hint); return; }
+  const w = e.target.closest('.w');
+  if (w){
+    const c = w.closest('.cue');
+    S.cur = +c.dataset.i; S.curW = +w.dataset.w;
+    markCursor(); seek(tiempoDe(S.cur, S.curW));
+    return;
+  }
   const c = e.target.closest('.cue');
-  if (c){ S.cur = +c.dataset.i; markCursor(); seek(S.cues[S.cur].ini); }
+  if (c){ S.cur = +c.dataset.i; S.curW = 0; markCursor(); seek(S.cues[S.cur].ini); }
 });
 el.warns.addEventListener('click', e => {
   const g = e.target.closest('[data-go]');   if (g) return goCue(+g.dataset.go);
@@ -984,8 +1144,10 @@ el.map.addEventListener('click', e => {
   const i = findCue(t); if (i >= 0){ S.cur = i; markCursor(); }
 });
 
-document.getElementById('bAle').onclick  = () => setMark(target(), 'ALE');
-document.getElementById('bEvo').onclick  = () => setMark(target(), 'EVO');
+document.getElementById('bAle').onclick  = () => marcar('ALE');
+document.getElementById('bEvo').onclick  = () => marcar('EVO');
+document.getElementById('bSplit').onclick = dividir;
+document.getElementById('bHint').onclick  = siguienteHint;
 document.getElementById('bDel').onclick  = () => setMark(target(), null);
 document.getElementById('bUndo').onclick = undo;
 document.getElementById('bPrevMark').onclick = () => moveMark(-1);
@@ -1014,8 +1176,9 @@ document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z'){ e.preventDefault(); return undo(); }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
-  const map = {' ':playPause, a:()=>setMark(target(),'ALE'), e:()=>setMark(target(),'EVO'),
+  const map = {' ':playPause, a:()=>marcar('ALE'), e:()=>marcar('EVO'),
                x:()=>setMark(target(),null), g:gotoGap, s:saveState,
+               d:dividir, n:siguienteHint,
                '[':()=>moveMark(-1), ']':()=>moveMark(1),
                arrowleft:()=>seek(el.v.currentTime-3), arrowright:()=>seek(el.v.currentTime+3),
                arrowup:()=>goCue(S.cur-1), arrowdown:()=>goCue(S.cur+1)};
