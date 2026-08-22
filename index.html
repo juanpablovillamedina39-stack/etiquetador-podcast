@@ -127,6 +127,8 @@
   .w{cursor:pointer;border-radius:3px}
   .w:hover{box-shadow:inset 2px 0 0 var(--ok);background:#ffffff14}
   .w.cw{box-shadow:inset 2px 0 0 var(--ok)}
+  .w.low{border-bottom:1px dashed var(--bad)}
+  .w.low:hover{background:#3a1a1a}
   .hint{display:inline-block;width:3px;height:.95em;background:#50506a;border-radius:2px;
     margin:0 5px -1px;vertical-align:-1px;cursor:pointer}
   .hint:hover{background:var(--ok)}
@@ -170,7 +172,8 @@
 <body>
 
 <header>
-  <h1><b>ALE</b> · <i>EVO</i> &nbsp;<span class="muted" style="font-weight:400">Etiquetador de hablantes</span></h1>
+  <h1><b>ALE</b> · <i>EVO</i> &nbsp;<span class="muted" style="font-weight:400">Etiquetador de hablantes</span>
+    <span id="ver" class="muted" style="font-weight:400;font-size:11px;margin-left:8px;font-family:ui-monospace,Menlo,monospace"></span></h1>
   <div class="sep"></div>
   <button class="filebtn">📄 Transcripción<input type="file" id="fTrans" accept=".json,.srt,.txt,.vtt,.sbv,.csv,application/json,text/plain"></button>
   <button class="filebtn">🎬 Video o audio<input type="file" id="fMedia" accept="video/*,audio/*"></button>
@@ -224,6 +227,7 @@
         <button id="bNextMark" class="grow" title="]">mover marca ▶</button>
       </div>
       <div class="row tight" style="margin-top:8px">
+        <button id="bDudosa" class="grow">⚠ Palabra dudosa <kbd>W</kbd></button>
         <button id="bSplit" class="grow">✂ Dividir aquí <kbd>D</kbd></button>
         <button id="bHint" class="grow">⏭ Cambio de turno <kbd>N</kbd></button>
       </div>
@@ -321,6 +325,7 @@
         <kbd>[ ]</kbd><span>mover la última marca una línea</span>
         <kbd>1…6</kbd><span>velocidad de reproducción</span>
         <kbd>D</kbd><span>partir la línea en la palabra del cursor</span>
+        <kbd>W</kbd><span>saltar a la siguiente palabra dudosa</span>
         <kbd>N</kbd><span>saltar al siguiente cambio de turno</span>
         <kbd>G</kbd><span>ir al primer hueco sin marcar</span>
         <kbd>S</kbd><span>guardar avance</span>
@@ -350,6 +355,7 @@
 <script>
 (function(){
 "use strict";
+const VERSION = "22 ago 2026 · 4";
 
 /* Momentos: los mismos tonos que usa el mapa de montaje del proyecto */
 const MOM = {
@@ -536,92 +542,129 @@ function rawDe(a, b, texto){
    así funciona con el JSON de Premiere, el de Whisper, el de Descript o el que venga. */
 const K_T   = ['start','startTime','start_time','startSeconds','startMs','begin','from','ts','in','tiempo','inicio'];
 const K_F   = ['end','endTime','end_time','to','stop','out','fin'];
+const K_D   = ['duration','dur','length','duracion'];
 const K_TX  = ['text','word','content','transcript','value','texto','palabra','w'];
+const K_SUB = ['words','palabras','tokens','items','segments'];
 const K_SPK = ['speaker','speakerId','speaker_id','speakerName','speakerLabel','spk','orador','hablante'];
 const campo = (o, ks) => { for (const k of ks) if (o[k] !== undefined && o[k] !== null) return o[k]; return null; };
+const subDe = o => { for (const k of K_SUB) if (Array.isArray(o[k]) && o[k].length) return o[k]; return null; };
 function numTiempo(v){
   if (typeof v === 'number') return v;
   if (typeof v === 'string' && /^\d{1,2}:\d{2}/.test(v)) return toSec(v);
   if (typeof v === 'string' && /^[\d.]+$/.test(v)) return parseFloat(v);
   return null;
 }
+const textoDe = o => {
+  const t = campo(o, K_TX);
+  if (t !== null && typeof t !== 'object') return String(t).trim();
+  const sub = subDe(o);
+  return sub ? sub.map(textoDe).filter(Boolean).join(' ').trim() : '';
+};
 
+/* Lee el JSON de Premiere y cualquier otro parecido.
+   El de Premiere trae: {language, speakers:[{id,name}], segments:[{start,duration,speaker,
+   words:[{start,duration,text,eos,confidence,tags}]}]} — los segmentos NO llevan texto propio
+   y el fin viene como "duration", no como "end". */
 function parseJSONTranscript(txt){
   let j; try { j = JSON.parse(txt); } catch(_){ return null; }
+
+  // nombres de los oradores: {id -> nombre}
+  const nombres = {};
+  (function buscaSpk(o, d){
+    if (d > 9 || !o || typeof o !== 'object') return;
+    if (Array.isArray(o)){
+      if (o.length && o.every(x => x && typeof x === 'object' && x.id !== undefined &&
+          (x.name !== undefined || x.nombre !== undefined)))
+        o.forEach(x => nombres[x.id] = String(x.name !== undefined ? x.name : x.nombre));
+      o.forEach(x => buscaSpk(x, d+1));
+    } else for (const k in o) buscaSpk(o[k], d+1);
+  })(j, 0);
+
   const arrays = [];
   (function walk(o, d){
     if (d > 9 || !o || typeof o !== 'object') return;
     if (Array.isArray(o)){
       const buenos = o.filter(x => x && typeof x === 'object' && !Array.isArray(x) &&
-        numTiempo(campo(x, K_T)) !== null && campo(x, K_TX) !== null).length;
+        numTiempo(campo(x, K_T)) !== null && textoDe(x)).length;
       if (o.length >= 2 && buenos >= Math.max(2, o.length * 0.6)) arrays.push(o);
       o.forEach(x => walk(x, d+1));
     } else for (const k in o) walk(o[k], d+1);
   })(j, 0);
   if (!arrays.length) return null;
-  /* Gana el array que cubre MÁS TEXTO, no el que tiene más elementos: si no, en un JSON de
-     segmentos con palabras dentro ganaría el "words" de un solo segmento. */
-  const cobertura = a => a.reduce((n, x) => n + String(campo(x, K_TX) || '').length, 0);
+  // gana el que cubre más texto (contando lo que llevan dentro), no el que tiene más elementos
+  const cobertura = a => a.reduce((n, x) => n + textoDe(x).length, 0);
   arrays.sort((a, b) => cobertura(b) - cobertura(a) || a.length - b.length);
-  const arr = arrays[0].filter(x => numTiempo(campo(x, K_T)) !== null && campo(x, K_TX) !== null);
+  const arr = arrays[0].filter(x => numTiempo(campo(x, K_T)) !== null && textoDe(x));
 
-  // ¿los tiempos vienen en milisegundos?
   const ts = arr.map(x => numTiempo(campo(x, K_T)));
-  const escala = (ts.every(Number.isInteger) && Math.max(...ts) > 10800) ? 0.001 : 1;
+  const escala = (ts.every(Number.isInteger) && Math.max.apply(null, ts) > 10800) ? 0.001 : 1;
   const item = x => {
     const a = numTiempo(campo(x, K_T)) * escala;
     let b = numTiempo(campo(x, K_F));
-    b = b === null ? null : b * escala;
-    if (b !== null && b < a) b = a + b;            // por si "end" era en realidad duración
-    const spk = campo(x, K_SPK);
-    return {a, b, tx: String(campo(x, K_TX)).trim(), spk: spk === null ? null : String(spk),
-            sub: x.words || x.palabras || x.tokens || null};
+    if (b === null){
+      const d = numTiempo(campo(x, K_D));
+      b = d === null ? null : a + d * escala;
+    } else { b = b * escala; if (b < a) b = a + b; }
+    const sp = campo(x, K_SPK);
+    const id = sp === null ? null : String(sp);
+    return {a, b, tx: textoDe(x), spk: id === null ? null : (nombres[id] || id),
+            sub: subDe(x), eos: !!x.eos, conf: typeof x.confidence === 'number' ? x.confidence : 1,
+            tag: Array.isArray(x.tags) && x.tags.length ? String(x.tags[0]) : null};
   };
   const its = arr.map(item).filter(x => x.tx);
+  if (!its.length) return null;
 
-  // ¿son palabras sueltas o frases?
-  const esPalabras = its.filter(x => x.tx.split(/\s+/).length <= 2).length > its.length * 0.7;
+  // si los elementos llevan palabras dentro, bajamos a nivel de palabra
+  let W = [];
+  if (its.some(x => Array.isArray(x.sub))){
+    for (const it of its){
+      const sub = Array.isArray(it.sub) ? it.sub.map(item).filter(x => x.tx) : [];
+      if (sub.length) for (const w of sub) W.push({...w, spk: w.spk || it.spk});
+      else W.push(it);
+    }
+  } else W = its;
+
+  const esPalabras = W.filter(x => x.tx.split(/\s+/).length <= 2).length > W.length * 0.7;
   const cues = [], marks = new Map(), auto = [], hints = new Set();
-
-  const cerrar = (buf, spk) => {
-    if (!buf.length) return;
-    const texto = buf.map(w => w.tx).join(' ');
-    const ini = buf[0].a, fin = buf[buf.length-1].b != null ? buf[buf.length-1].b : buf[buf.length-1].a + .4;
-    cues.push({ini, fin, texto, raw: rawDe(ini, fin, texto),
-      words: buf.map(w => ({w: w.tx, ini: w.a, fin: w.b != null ? w.b : w.a}))});
-    if (spk) { const i = cues.length - 1;
-      if (/^(ale|alejandra)$/i.test(spk)) marks.set(i,'ALE');
-      else if (/^(evo|evonny)$/i.test(spk)) marks.set(i,'EVO');
-      else { auto.push({i, name: spk}); hints.add(i); } }
+  const anota = (i, spk) => {
+    if (!spk) return;
+    if (/^(ale|alejandra)$/i.test(spk)) marks.set(i, 'ALE');
+    else if (/^(evo|evonny)$/i.test(spk)) marks.set(i, 'EVO');
+    else { auto.push({i, name: spk}); hints.add(i); }
   };
 
   if (esPalabras){
-    let buf = [], spk = its[0] ? its[0].spk : null;
-    for (const w of its){
-      const corta = buf.length && (w.spk !== spk ||
-        (w.a - buf[0].a > 8) || /[.?!…]$/.test(buf[buf.length-1].tx));
-      if (corta){ cerrar(buf, spk); buf = []; spk = w.spk; }
+    let buf = [], spk = W[0].spk;
+    const cerrar = () => {
+      if (!buf.length) return;
+      const texto = buf.map(w => w.tx).join(' ');
+      const ini = buf[0].a;
+      const ult = buf[buf.length-1];
+      const fin = ult.b != null ? ult.b : ult.a + 0.4;
+      cues.push({ini, fin, texto, raw: rawDe(ini, fin, texto),
+        words: buf.map(w => ({w: w.tx, ini: w.a, fin: w.b != null ? w.b : w.a,
+                              conf: w.conf, tag: w.tag}))});
+      anota(cues.length - 1, spk);
+      buf = [];
+    };
+    for (const w of W){
+      if (buf.length && (w.spk !== spk || w.a - buf[0].a > 8)){ cerrar(); spk = w.spk; }
       buf.push(w);
+      if (w.eos) { cerrar(); }              // fin de frase que marca el propio transcriptor
     }
-    cerrar(buf, spk);
+    cerrar();
   } else {
-    for (const it of its){
-      const sub = Array.isArray(it.sub) ? it.sub.map(item).filter(x => x.tx) : null;
+    for (const it of W){
       const fin = it.b != null ? it.b : it.a + Math.max(1, it.tx.length / 14);
-      cues.push({ini: it.a, fin, texto: it.tx, raw: rawDe(it.a, fin, it.tx),
-        words: sub && sub.length ? sub.map(w => ({w: w.tx, ini: w.a, fin: w.b != null ? w.b : w.a})) : null});
-      if (it.spk){ const i = cues.length - 1;
-        if (/^(ale|alejandra)$/i.test(it.spk)) marks.set(i,'ALE');
-        else if (/^(evo|evonny)$/i.test(it.spk)) marks.set(i,'EVO');
-        else { auto.push({i, name: it.spk}); hints.add(i); } }
+      cues.push({ini: it.a, fin, texto: it.tx, raw: rawDe(it.a, fin, it.tx), words: null});
+      anota(cues.length - 1, it.spk);
     }
   }
   if (!cues.length) return null;
-  // sin cambios de hablante seguidos repetidos
   let ult = null;
-  for (const [k, v] of [...marks].sort((a,b)=>a[0]-b[0])){ if (v === ult) marks.delete(k); else ult = v; }
+  for (const [k, v] of [...marks].sort((a,b) => a[0]-b[0])){ if (v === ult) marks.delete(k); else ult = v; }
   limpiarEtiquetas(cues, auto, hints);
-  return {cues, marks, auto, hints, palabras: cues.some(c => c.words)};
+  return {cues, marks, auto, hints};
 }
 
 /* Formato plano (Premiere, Descript, YouTube, Whisper):
@@ -730,7 +773,7 @@ function renderDoc(){
       const m = MOM[S.moms.get(i)];
       h += '<span class="mom" data-mom="'+i+'" style="background:'+m.c+'" title="'+m.n+' — clic para quitar">'+m.t+'</span>';
     }
-    h += '<span class="cue' + (S.edited.has(i) ? ' ed' : '') + '" data-i="'+i+'">'+palabras(S.cues[i].texto)+'</span> ';
+    h += '<span class="cue' + (S.edited.has(i) ? ' ed' : '') + '" data-i="'+i+'">'+palabras(S.cues[i].texto, i)+'</span> ';
   }
   el.doc.innerHTML = h;
   paintAll();
@@ -743,8 +786,15 @@ function turnHead(i, sp){
     '<button class="del" data-del="'+i+'" title="Quitar esta marca">✕</button>'+
   '</div>';
 }
-function palabras(t){
-  return t.split(/\s+/).map((w, j) => '<span class="w" data-w="'+j+'">'+esc(w)+'</span>').join(' ');
+function palabras(t, i){
+  const ws = S.cues[i] && S.cues[i].words;
+  return t.split(/\s+/).map((w, j) => {
+    const info = ws && ws[j];
+    const dudosa = info && info.conf !== undefined && info.conf < 0.75;
+    return '<span class="w'+(dudosa ? ' low' : '')+'" data-w="'+j+'"'+
+      (dudosa ? ' title="El transcriptor solo estaba '+Math.round(info.conf*100)+'% seguro — doble clic para corregir"' : '')+
+      '>'+esc(w)+'</span>';
+  }).join(' ');
 }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -833,6 +883,10 @@ function renderStats(){
 function renderWarns(T, a, e, n, base){
   const w = [];
   if (!S.cues.length){ el.warns.innerHTML = ''; return; }
+
+  const nd = dudosas().length;
+  if (nd) w.push(['w', 'Hay <b>'+nd+'</b> palabra(s) que el transcriptor no oyó bien — van subrayadas en rojo. '+
+    '<a data-dud="1">Ir a la primera</a> y corregirla con doble clic. Si quedan mal, acaban citadas en el mapa.']);
 
   const nombres = [...new Set(S.auto.map(x => x.name))];
   if (nombres.length === 1 && !S.marks.size){
@@ -1019,6 +1073,26 @@ function editarPalabra(node){
   node.onblur = () => cerrar(true);
 }
 
+function dudosas(){
+  const out = [];
+  S.cues.forEach((c, i) => {
+    if (!c.words) return;
+    c.words.forEach((w, j) => { if (w.conf !== undefined && w.conf < 0.75 && !S.edited.has(i)) out.push([i, j]); });
+  });
+  return out;
+}
+function siguienteDudosa(){
+  const d = dudosas().filter(([i]) => i > S.cur);
+  const x = d.length ? d[0] : (dudosas()[0] || null);
+  if (!x){ toast('No hay palabras dudosas'); return; }
+  S.cur = x[0]; S.curW = x[1];
+  markCursor();
+  const nd = el.doc.querySelector('.cue[data-i="'+S.cur+'"] .w[data-w="'+S.curW+'"]');
+  if (nd) nd.scrollIntoView({block:'center'});
+  seek(tiempoDe(S.cur, S.curW));
+  toast('Doble clic o Enter para corregirla');
+}
+
 function siguienteHint(){
   const h = [...S.hints].sort((a,b) => a-b).find(k => k > S.cur);
   if (h === undefined) return toast('No hay más cambios de turno marcados');
@@ -1127,6 +1201,7 @@ function exportTxt(){
   let head =
     '# Transcripción marcada — CAP ' + cap() + '\n' +
     '# Fuente: ' + (S.transName || '—') + ' · duración ' + hms(S.dur) + ' · ' + S.cues.length + ' líneas\n' +
+    '# Etiquetador v' + VERSION + '\n' +
     '# Voces: **ALE** = Alejandra (etiqueta mango en Premiere) · **EVO** = Evonny (etiqueta rosa)\n' +
     '# El marcador manda hasta el siguiente marcador. ' + T.length + ' turnos marcados.\n';
   if (S.edited.size)
@@ -1420,11 +1495,17 @@ el.doc.addEventListener('dblclick', e => {
 el.warns.addEventListener('click', e => {
   const g = e.target.closest('[data-go]');   if (g) return goCue(+g.dataset.go);
   const p = e.target.closest('[data-gap]');  if (p) return gotoGap();
+  const du = e.target.closest('[data-dud]');
+  if (du) return siguienteDudosa();
   const bk = e.target.closest('[data-bk]');
   if (bk && S.backup){ loadState(S.backup); return; }
   const a = e.target.closest('[data-auto]');
   if (a){
-    const nombres = [...new Set(S.auto.map(x => x.name))];
+    const nd = dudosas().length;
+  if (nd) w.push(['w', 'Hay <b>'+nd+'</b> palabra(s) que el transcriptor no oyó bien — van subrayadas en rojo. '+
+    '<a data-dud="1">Ir a la primera</a> y corregirla con doble clic. Si quedan mal, acaban citadas en el mapa.']);
+
+  const nombres = [...new Set(S.auto.map(x => x.name))];
     const mapa = {}; mapa[nombres[0]] = a.dataset.auto === '0' ? 'ALE' : 'EVO';
     mapa[nombres[1]] = a.dataset.auto === '0' ? 'EVO' : 'ALE';
     S.marks = new Map(); S.undo = [];
@@ -1444,6 +1525,7 @@ el.map.addEventListener('click', e => {
 document.getElementById('bAle').onclick  = () => marcar('ALE');
 document.getElementById('bEvo').onclick  = () => marcar('EVO');
 document.getElementById('bSplit').onclick = dividir;
+document.getElementById('bDudosa').onclick = siguienteDudosa;
 document.getElementById('bHint').onclick  = siguienteHint;
 document.getElementById('bDel').onclick  = () => setMark(target(), null);
 document.getElementById('bUndo').onclick = undo;
@@ -1475,7 +1557,7 @@ document.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   const map = {' ':playPause, a:()=>marcar('ALE'), e:()=>marcar('EVO'),
                x:()=>setMark(target(),null), g:gotoGap, s:saveState,
-               d:dividir, n:siguienteHint,
+               d:dividir, n:siguienteHint, w:siguienteDudosa,
                enter:()=>{ const nd = el.doc.querySelector('.cue[data-i="'+S.cur+'"] .w[data-w="'+S.curW+'"]');
                            if (nd) editarPalabra(nd); },
                '[':()=>moveMark(-1), ']':()=>moveMark(1),
@@ -1492,6 +1574,8 @@ window.addEventListener('beforeunload', e => {
   if (S.dirty && S.marks.size){ e.preventDefault(); e.returnValue = ''; }
 });
 
+document.getElementById('ver').textContent = 'v ' + VERSION;
+document.getElementById('ver').title = 'Si esto no coincide con la versión que te pasaron, estás viendo una copia vieja: recarga con Cmd+Shift+R';
 tick();
 
 /* expuesto para pruebas automatizadas */
