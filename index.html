@@ -172,13 +172,13 @@
 <header>
   <h1><b>ALE</b> · <i>EVO</i> &nbsp;<span class="muted" style="font-weight:400">Etiquetador de hablantes</span></h1>
   <div class="sep"></div>
-  <button class="filebtn">📄 Transcripción<input type="file" id="fTrans" accept=".srt,.txt,.vtt"></button>
+  <button class="filebtn">📄 Transcripción<input type="file" id="fTrans" accept=".json,.srt,.txt,.vtt,.sbv,.csv,application/json,text/plain"></button>
   <button class="filebtn">🎬 Video o audio<input type="file" id="fMedia" accept="video/*,audio/*"></button>
   <span class="pill" id="pTrans">sin transcripción</span>
   <span class="pill" id="pMedia">sin media</span>
   <div class="sep"></div>
   <button id="bSave">💾 Guardar avance</button>
-  <button class="filebtn">📂 Retomar<input type="file" id="fState" accept=".json"></button>
+  <button class="filebtn">📂 Retomar<input type="file" id="fState" accept=".json,application/json"></button>
   <span class="pill" id="saveState">sin cambios</span>
 </header>
 
@@ -334,7 +334,7 @@
     <div id="empty">
       <h3>Carga la transcripción del bruto</h3>
       <ol>
-        <li>Arriba, <b>📄 Transcripción</b>: el <span class="mono">.srt</span> o <span class="mono">.txt</span> del bruto, tal como sale (con muletillas y silencios).</li>
+        <li>Arriba, <b>📄 Transcripción</b>: el <span class="mono">.json</span> que exporta Premiere (el mejor: trae el timecode de cada palabra), o el <span class="mono">.srt</span> / <span class="mono">.txt</span> del bruto tal como sale.</li>
         <li><b>🎬 Video o audio</b>: el mismo capítulo, para oírlo mientras marcas. Nada se sube a internet.</li>
         <li>Dale ▶︎ y cada vez que cambie la voz, aprieta <kbd>A</kbd> o <kbd>E</kbd>. La marca manda hasta la siguiente.</li>
         <li>Exporta la <b>transcripción marcada</b> y súbela al proyecto de Claude: te devuelve el mapa de montaje.</li>
@@ -1343,7 +1343,12 @@ document.getElementById('fTrans').addEventListener('change', e => {
   r.onload = () => {
     const {cues, marks, auto, hints} = parseTranscript(r.result);
     if (!cues.length){
-      alert('No pude leer timecodes en ese archivo.\n\nEsperaba líneas tipo:\n  00:22:40,120 --> 00:22:43,000\no\n  00:22:40:13 - 00:22:43:02');
+      const esJson = /\.json$/i.test(f.name) || /^\s*[{[]/.test(r.result);
+      alert(esJson
+        ? 'Ese JSON lo abrí bien, pero no encontré dentro los campos de tiempo y texto que esperaba.\n\n'+
+          'Mándaselo a Claude tal cual y te ajusto el lector al esquema exacto de tu Premiere.\n\n'+
+          'Mientras tanto puedes trabajar con el .srt o el .txt del mismo capítulo.'
+        : 'No pude leer timecodes en ese archivo.\n\nEsperaba líneas tipo:\n  00:22:40,120 --> 00:22:43,000\no\n  00:22:40:13 - 00:22:43:02');
       return;
     }
     S.cues = cues; S.marks = marks; S.undo = []; S.cur = 0; S.now = -1; S.auto = auto || []; S.hints = hints || new Set(); S.curW = 0;
