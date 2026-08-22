@@ -130,6 +130,22 @@
   .hint{display:inline-block;width:3px;height:.95em;background:#50506a;border-radius:2px;
     margin:0 5px -1px;vertical-align:-1px;cursor:pointer}
   .hint:hover{background:var(--ok)}
+  .w.ed{border-bottom:1px dotted #7a7a95}
+  .w[contenteditable]{background:#2A2A38;outline:2px solid var(--ok);border-radius:3px;padding:0 2px}
+  .mom{display:inline-block;font-size:11px;line-height:1;padding:3px 6px;border-radius:5px;
+    margin:0 5px 0 0;color:#12121A;font-weight:700;cursor:pointer;vertical-align:1px;
+    font-family:ui-monospace,Menlo,monospace;letter-spacing:.4px}
+  .mom:hover{filter:brightness(1.15)}
+  #map .tick{position:absolute;top:0;width:2px;height:9px;border-radius:0 0 2px 2px}
+  .momrow{display:flex;gap:8px;align-items:baseline;font-size:12.5px;padding:5px 0;
+    border-bottom:1px solid #1e1e28;cursor:pointer}
+  .momrow:hover{background:#1e1e28}
+  .momrow .tc{font-family:ui-monospace,Menlo,monospace;color:var(--muted);font-size:11.5px;flex:none}
+  .momrow .tx{color:#C9C9D6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .momkeys{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+  .momkeys button{display:flex;align-items:center;gap:7px;justify-content:flex-start;
+    padding:6px 8px;font-size:12px}
+  .momkeys .sw{width:10px;height:10px;border-radius:3px;flex:none}
 
   #empty{color:var(--muted);text-align:center;padding:14vh 20px;line-height:1.8}
   #empty h3{color:var(--txt);font-size:19px;margin:0 0 8px}
@@ -218,6 +234,15 @@
         Si en una misma línea termina una y empieza la otra, haz clic en <b>la palabra donde arranca
         la otra</b> y aprieta <kbd>A</kbd> o <kbd>E</kbd>: parte la línea ahí y marca de una.
       </div>
+    </div>
+
+    <div class="panel">
+      <h2>Momentos <span id="momCount" style="color:var(--txt)">0</span></h2>
+      <div class="momkeys" id="momKeys"></div>
+      <div class="muted" style="font-size:11.5px;margin:9px 0 4px;line-height:1.45">
+        Marca la línea que suena. Esto es lo que después alimenta la intro y los 4 clips.
+      </div>
+      <div id="momList" style="max-height:230px;overflow-y:auto"></div>
     </div>
 
     <div class="panel">
@@ -326,6 +351,17 @@
 (function(){
 "use strict";
 
+/* Momentos: los mismos tonos que usa el mapa de montaje del proyecto */
+const MOM = {
+  risa:      {t:'RISA',    n:'Risa / blooper',        c:'#FFB020', k:'r'},
+  tension:   {t:'TENSIÓN', n:'Tensión / polémico',    c:'#FF4D4D', k:'t'},
+  confesion: {t:'CONFES.', n:'Confesión',             c:'#FF7A45', k:'c'},
+  frase:     {t:'FRASE',   n:'Frase citable',         c:'#7B61FF', k:'f'},
+  practico:  {t:'PRÁCTICO',n:'Consejo práctico',      c:'#22C7A9', k:'p'},
+  interpela: {t:'PREGUNTA',n:'Interpela a la audiencia', c:'#4DA3FF', k:'q'}
+};
+const MOMK = {}; for (const k in MOM) MOMK[MOM[k].k] = k;
+
 /* ============================ estado ============================ */
 const S = {
   cues: [],        // {ini, fin, texto, raw}
@@ -336,6 +372,8 @@ const S = {
   auto: [],        // hablantes ya separados por la transcripción (Speaker 1/2)
   hints: new Set(),// dónde la transcripción marcó cambio de turno (aunque no supiera de quién)
   curW: 0,         // palabra del cursor dentro de la línea
+  moms: new Map(), // idx -> tipo de momento (risa, tensión, frase…)
+  edited: new Set(),// líneas con el texto corregido a mano
   undo: [],
   transName: '',
   mediaName: '',
@@ -346,7 +384,18 @@ const $ = s => document.querySelector(s);
 const el = {};
 ['v','doc','empty','map','playhead','mapEnd','split','pctA','pctE','pctN','stTurns','stMin',
  'stCues','stDur','warns','clock','pTrans','pMedia','saveState','toast','dl','follow','rate',
- 'cFps','cStart','cMode','cCap','cPath'].forEach(id => el[id] = document.getElementById(id));
+ 'cFps','cStart','cMode','cCap','cPath','momCount','momList','momKeys'].forEach(id => el[id] = document.getElementById(id));
+
+el.momKeys.innerHTML = Object.keys(MOM).map(t =>
+  '<button data-mt="'+t+'"><i class="sw" style="background:'+MOM[t].c+'"></i>'+
+  MOM[t].n+' <kbd>'+MOM[t].k.toUpperCase()+'</kbd></button>').join('');
+el.momKeys.addEventListener('click', e => {
+  const b = e.target.closest('[data-mt]'); if (b) momento(b.dataset.mt);
+});
+el.momList.addEventListener('click', e => {
+  const r = e.target.closest('[data-go]'); if (r) goCue(+r.dataset.go);
+});
+
 
 /* ============================ tiempo ============================ */
 const FPSMAP = {
@@ -396,6 +445,10 @@ const MARK_RE  = /\*\*\s*(ALE|EVO)\s*\*\*/i;
 
 function parseTranscript(raw){
   raw = raw.replace(/^﻿/, '').replace(/\r/g, '');
+  if (/^\s*[{[]/.test(raw)){
+    const j = parseJSONTranscript(raw);
+    if (j) return j;
+  }
   const blocks = raw.trim().split(/\n\s*\n+/);
   const cues = [], marks = new Map();
   let pending = null;
@@ -476,6 +529,99 @@ function rawDe(a, b, texto){
   const st = s => p2(Math.floor(s/3600))+':'+p2(Math.floor(s/60)%60)+':'+p2(Math.floor(s)%60)+','+
                   String(Math.round((s%1)*1000)).padStart(3,'0');
   return st(a) + ' --> ' + st(b) + '\n' + texto;
+}
+
+/* JSON con timecode POR PALABRA — lo que exporta Premiere y casi cualquier transcriptor.
+   No asume una forma concreta: busca el array más grande cuyos objetos tengan tiempo y texto,
+   así funciona con el JSON de Premiere, el de Whisper, el de Descript o el que venga. */
+const K_T   = ['start','startTime','start_time','startSeconds','startMs','begin','from','ts','in','tiempo','inicio'];
+const K_F   = ['end','endTime','end_time','to','stop','out','fin'];
+const K_TX  = ['text','word','content','transcript','value','texto','palabra','w'];
+const K_SPK = ['speaker','speakerId','speaker_id','speakerName','speakerLabel','spk','orador','hablante'];
+const campo = (o, ks) => { for (const k of ks) if (o[k] !== undefined && o[k] !== null) return o[k]; return null; };
+function numTiempo(v){
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && /^\d{1,2}:\d{2}/.test(v)) return toSec(v);
+  if (typeof v === 'string' && /^[\d.]+$/.test(v)) return parseFloat(v);
+  return null;
+}
+
+function parseJSONTranscript(txt){
+  let j; try { j = JSON.parse(txt); } catch(_){ return null; }
+  const arrays = [];
+  (function walk(o, d){
+    if (d > 9 || !o || typeof o !== 'object') return;
+    if (Array.isArray(o)){
+      const buenos = o.filter(x => x && typeof x === 'object' && !Array.isArray(x) &&
+        numTiempo(campo(x, K_T)) !== null && campo(x, K_TX) !== null).length;
+      if (o.length >= 2 && buenos >= Math.max(2, o.length * 0.6)) arrays.push(o);
+      o.forEach(x => walk(x, d+1));
+    } else for (const k in o) walk(o[k], d+1);
+  })(j, 0);
+  if (!arrays.length) return null;
+  /* Gana el array que cubre MÁS TEXTO, no el que tiene más elementos: si no, en un JSON de
+     segmentos con palabras dentro ganaría el "words" de un solo segmento. */
+  const cobertura = a => a.reduce((n, x) => n + String(campo(x, K_TX) || '').length, 0);
+  arrays.sort((a, b) => cobertura(b) - cobertura(a) || a.length - b.length);
+  const arr = arrays[0].filter(x => numTiempo(campo(x, K_T)) !== null && campo(x, K_TX) !== null);
+
+  // ¿los tiempos vienen en milisegundos?
+  const ts = arr.map(x => numTiempo(campo(x, K_T)));
+  const escala = (ts.every(Number.isInteger) && Math.max(...ts) > 10800) ? 0.001 : 1;
+  const item = x => {
+    const a = numTiempo(campo(x, K_T)) * escala;
+    let b = numTiempo(campo(x, K_F));
+    b = b === null ? null : b * escala;
+    if (b !== null && b < a) b = a + b;            // por si "end" era en realidad duración
+    const spk = campo(x, K_SPK);
+    return {a, b, tx: String(campo(x, K_TX)).trim(), spk: spk === null ? null : String(spk),
+            sub: x.words || x.palabras || x.tokens || null};
+  };
+  const its = arr.map(item).filter(x => x.tx);
+
+  // ¿son palabras sueltas o frases?
+  const esPalabras = its.filter(x => x.tx.split(/\s+/).length <= 2).length > its.length * 0.7;
+  const cues = [], marks = new Map(), auto = [], hints = new Set();
+
+  const cerrar = (buf, spk) => {
+    if (!buf.length) return;
+    const texto = buf.map(w => w.tx).join(' ');
+    const ini = buf[0].a, fin = buf[buf.length-1].b != null ? buf[buf.length-1].b : buf[buf.length-1].a + .4;
+    cues.push({ini, fin, texto, raw: rawDe(ini, fin, texto),
+      words: buf.map(w => ({w: w.tx, ini: w.a, fin: w.b != null ? w.b : w.a}))});
+    if (spk) { const i = cues.length - 1;
+      if (/^(ale|alejandra)$/i.test(spk)) marks.set(i,'ALE');
+      else if (/^(evo|evonny)$/i.test(spk)) marks.set(i,'EVO');
+      else { auto.push({i, name: spk}); hints.add(i); } }
+  };
+
+  if (esPalabras){
+    let buf = [], spk = its[0] ? its[0].spk : null;
+    for (const w of its){
+      const corta = buf.length && (w.spk !== spk ||
+        (w.a - buf[0].a > 8) || /[.?!…]$/.test(buf[buf.length-1].tx));
+      if (corta){ cerrar(buf, spk); buf = []; spk = w.spk; }
+      buf.push(w);
+    }
+    cerrar(buf, spk);
+  } else {
+    for (const it of its){
+      const sub = Array.isArray(it.sub) ? it.sub.map(item).filter(x => x.tx) : null;
+      const fin = it.b != null ? it.b : it.a + Math.max(1, it.tx.length / 14);
+      cues.push({ini: it.a, fin, texto: it.tx, raw: rawDe(it.a, fin, it.tx),
+        words: sub && sub.length ? sub.map(w => ({w: w.tx, ini: w.a, fin: w.b != null ? w.b : w.a})) : null});
+      if (it.spk){ const i = cues.length - 1;
+        if (/^(ale|alejandra)$/i.test(it.spk)) marks.set(i,'ALE');
+        else if (/^(evo|evonny)$/i.test(it.spk)) marks.set(i,'EVO');
+        else { auto.push({i, name: it.spk}); hints.add(i); } }
+    }
+  }
+  if (!cues.length) return null;
+  // sin cambios de hablante seguidos repetidos
+  let ult = null;
+  for (const [k, v] of [...marks].sort((a,b)=>a[0]-b[0])){ if (v === ult) marks.delete(k); else ult = v; }
+  limpiarEtiquetas(cues, auto, hints);
+  return {cues, marks, auto, hints, palabras: cues.some(c => c.words)};
 }
 
 /* Formato plano (Premiere, Descript, YouTube, Whisper):
@@ -580,7 +726,11 @@ function renderDoc(){
     if (S.marks.has(i)) h += turnHead(i, S.marks.get(i));
     if (S.hints.has(i) && !S.marks.has(i))
       h += '<i class="hint" data-hint="'+i+'" title="Aquí la transcripción creyó que cambiaba el turno"></i>';
-    h += '<span class="cue" data-i="'+i+'">'+palabras(S.cues[i].texto)+'</span> ';
+    if (S.moms.has(i)){
+      const m = MOM[S.moms.get(i)];
+      h += '<span class="mom" data-mom="'+i+'" style="background:'+m.c+'" title="'+m.n+' — clic para quitar">'+m.t+'</span>';
+    }
+    h += '<span class="cue' + (S.edited.has(i) ? ' ed' : '') + '" data-i="'+i+'">'+palabras(S.cues[i].texto)+'</span> ';
   }
   el.doc.innerHTML = h;
   paintAll();
@@ -620,6 +770,7 @@ function markCursor(){
 function tiempoDe(i, w){
   const c = S.cues[i];
   if (!w) return c.ini;
+  if (c.words && c.words[w]) return c.words[w].ini;
   const ws = c.texto.split(/\s+/);
   const antes = ws.slice(0, w).join(' ').length;
   return c.ini + (c.fin - c.ini) * (antes / Math.max(1, c.texto.length));
@@ -645,6 +796,15 @@ function renderStats(){
     d.title = t.sp + '  ' + hms(t.ini) + ' → ' + hms(t.fin);
     frag.appendChild(d);
   }
+  el.map.querySelectorAll('.tick').forEach(n => n.remove());
+  for (const [i, t] of S.moms){
+    const d = document.createElement('div');
+    d.className = 'tick';
+    d.style.left = (S.cues[i].ini/total*100) + '%';
+    d.style.background = MOM[t].c;
+    d.title = MOM[t].n + ' · ' + hms(S.cues[i].ini);
+    frag.appendChild(d);
+  }
   el.map.insertBefore(frag, el.playhead);
   el.mapEnd.textContent = hms(S.dur);
 
@@ -666,6 +826,7 @@ function renderStats(){
   const mn = T.length ? T.reduce((m,t) => Math.min(m, t.fin - t.ini), 1e9) : 0;
   el.stMin.textContent = T.length ? mn.toFixed(1) + 's' : '—';
 
+  renderMomentos();
   renderWarns(T, a, e, n, base);
 }
 
@@ -740,10 +901,14 @@ function splitCue(i, w){
   const c = S.cues[i], ws = c.texto.split(/\s+/);
   if (w <= 0 || w >= ws.length) return false;
   const a = ws.slice(0, w).join(' '), b = ws.slice(w).join(' ');
-  const t = c.ini + (c.fin - c.ini) * (a.length / Math.max(1, a.length + b.length + 1));
+  const exacto = c.words && c.words[w] ? c.words[w].ini : null;
+  const t = exacto !== null ? exacto
+          : c.ini + (c.fin - c.ini) * (a.length / Math.max(1, a.length + b.length + 1));
   S.cues.splice(i, 1,
-    {ini: c.ini, fin: t, texto: a, raw: rawDe(c.ini, t, a)},
-    {ini: t, fin: c.fin, texto: b, raw: rawDe(t, c.fin, b)});
+    {ini: c.ini, fin: t, texto: a, raw: rawDe(c.ini, t, a),
+     words: c.words ? c.words.slice(0, w) : null},
+    {ini: t, fin: c.fin, texto: b, raw: rawDe(t, c.fin, b),
+     words: c.words ? c.words.slice(w) : null});
   correrIndices(i, +1);
   S.undo.push({type: 'split', i});
   return true;
@@ -762,6 +927,10 @@ function correrIndices(i, d){
   S.marks = m;
   S.auto = S.auto.map(x => ({...x, i: x.i > i ? x.i + d : x.i}));
   S.hints = new Set([...S.hints].map(k => k > i ? k + d : k));
+  const mm = new Map();
+  for (const [k, v] of S.moms) mm.set(k > i ? k + d : k, v);
+  S.moms = mm;
+  S.edited = new Set([...S.edited].map(k => k > i ? k + d : k));
   if (S.cur > i) S.cur += d;
 }
 
@@ -789,6 +958,67 @@ function dividir(){
   renderDoc(); renderStats(); dirty();
   toast('Dividida en ' + hms(S.cues[S.cur].ini) + ' — ahora marca A o E');
 }
+/* ---------- momentos ---------- */
+function momento(tipo){
+  if (!S.cues.length) return;
+  const i = (el.v.src && !el.v.paused && S.now >= 0) ? S.now : S.cur;
+  if (S.moms.get(i) === tipo) S.moms.delete(i); else S.moms.set(i, tipo);
+  S.cur = i;
+  renderDoc(); renderStats(); dirty();
+  toast(S.moms.has(i) ? MOM[tipo].n + ' en ' + hms(S.cues[i].ini) : 'Momento quitado');
+}
+function renderMomentos(){
+  const lista = [...S.moms.entries()].sort((a,b) => a[0]-b[0]);
+  el.momCount.textContent = lista.length;
+  if (!lista.length){
+    el.momList.innerHTML = '<div class="muted" style="font-size:12px;padding:6px 0">'+
+      'Todavía nada. Mientras oyes, marca lo que te sirva para la intro y los clips.</div>';
+    return;
+  }
+  const porTipo = {};
+  for (const [, t] of lista) porTipo[t] = (porTipo[t] || 0) + 1;
+  el.momList.innerHTML =
+    '<div class="legend" style="margin:0 0 8px">' +
+    Object.keys(porTipo).map(t => '<span><i class="dot" style="background:'+MOM[t].c+'"></i>'+
+      MOM[t].t+' <b>'+porTipo[t]+'</b></span>').join('') + '</div>' +
+    lista.map(([i, t]) => '<div class="momrow" data-go="'+i+'">'+
+      '<span class="mom" style="background:'+MOM[t].c+';cursor:default">'+MOM[t].t+'</span>'+
+      '<span class="tc">'+hms(S.cues[i].ini)+'</span>'+
+      '<span class="tx">'+esc(S.cues[i].texto.slice(0, 70))+'</span></div>').join('');
+}
+
+/* ---------- corregir una palabra mal transcrita ---------- */
+function editarPalabra(node){
+  if (!node || node.isContentEditable) return;
+  const cue = node.closest('.cue'), i = +cue.dataset.i, j = +node.dataset.w;
+  const antes = node.textContent;
+  node.contentEditable = 'true';
+  node.focus();
+  const r = document.createRange(); r.selectNodeContents(node);
+  const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+
+  const cerrar = (guardar) => {
+    node.contentEditable = 'false';
+    const ahora = node.textContent.replace(/\s+/g, ' ').trim();
+    if (!guardar || !ahora || ahora === antes){ node.textContent = antes; return; }
+    const ws = S.cues[i].texto.split(/\s+/);
+    ws[j] = ahora;
+    S.cues[i].texto = ws.join(' ');
+    S.cues[i].raw = rawDe(S.cues[i].ini, S.cues[i].fin, S.cues[i].texto);
+    if (S.cues[i].words && S.cues[i].words[j]) S.cues[i].words[j].w = ahora;
+    S.edited.add(i);
+    cue.classList.add('ed');
+    dirty();
+    toast('“'+antes+'” → “'+ahora+'”');
+  };
+  node.onkeydown = ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter'){ ev.preventDefault(); cerrar(true); node.blur(); }
+    if (ev.key === 'Escape'){ ev.preventDefault(); cerrar(false); node.blur(); }
+  };
+  node.onblur = () => cerrar(true);
+}
+
 function siguienteHint(){
   const h = [...S.hints].sort((a,b) => a-b).find(k => k > S.cur);
   if (h === undefined) return toast('No hay más cambios de turno marcados');
@@ -893,14 +1123,26 @@ const cap = () => (el.cCap.value || '').trim().replace(/[^\w-]/g,'') || 'N';
 function exportTxt(){
   if (!S.cues.length) return toast('Carga primero la transcripción');
   const T = turns();
-  const head =
+  const moms = [...S.moms.entries()].sort((a,b) => a[0]-b[0]);
+  let head =
     '# Transcripción marcada — CAP ' + cap() + '\n' +
     '# Fuente: ' + (S.transName || '—') + ' · duración ' + hms(S.dur) + ' · ' + S.cues.length + ' líneas\n' +
     '# Voces: **ALE** = Alejandra (etiqueta mango en Premiere) · **EVO** = Evonny (etiqueta rosa)\n' +
     '# El marcador manda hasta el siguiente marcador. ' + T.length + ' turnos marcados.\n';
+  if (S.edited.size)
+    head += '# ' + S.edited.size + ' línea(s) con el texto corregido a mano sobre lo que dijo la transcripción.\n';
+  if (moms.length){
+    head += '#\n# MOMENTOS MARCADOS POR JUAN PABLO OYENDO EL EPISODIO (' + moms.length + ').\n' +
+            '# Son su criterio, no el de la transcripción: úsalos como primera lista de candidatos\n' +
+            '# para la intro y los 4 clips, sin dejar de leer el episodio entero.\n';
+    for (const [i, t] of moms)
+      head += '#   ' + (MOM[t].t + '        ').slice(0, 9) + ' ' + hms(S.cues[i].ini) + '  ' +
+              S.cues[i].texto.slice(0, 90).replace(/\s+/g, ' ') + '\n';
+  }
   let out = head + '\n';
   for (let i = 0; i < S.cues.length; i++){
     if (S.marks.has(i)) out += '**' + S.marks.get(i) + '**\n\n';
+    if (S.moms.has(i)) out += '[' + MOM[S.moms.get(i)].t + ']\n\n';
     out += S.cues[i].raw + '\n\n';
   }
   download('cap-' + cap() + '-marcado.txt', out);
@@ -965,7 +1207,12 @@ function exportXml(){
 
   const markers = B.map(b =>
     '<marker><name>'+b.sp+'</name><comment>'+b.sp+' · '+framesToTC(b.a+off,f)+'</comment>'+
-    '<in>'+b.a+'</in><out>-1</out></marker>').join('');
+    '<in>'+b.a+'</in><out>-1</out></marker>').join('') +
+    [...S.moms.entries()].sort((x,y)=>x[0]-y[0]).map(([i, t]) => {
+      const fr = Math.max(0, Math.round(S.cues[i].ini * f) - off);
+      return '<marker><name>★ '+MOM[t].t+'</name><comment>'+esc(S.cues[i].texto.slice(0,120))+'</comment>'+
+             '<in>'+fr+'</in><out>-1</out></marker>';
+    }).join('');
 
   const xml = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n<xmeml version="4">\n'+
     '<sequence id="seq-hablantes"><uuid>'+uuid()+'</uuid>'+
@@ -1010,18 +1257,41 @@ function exportSrt(){
 }
 
 /* ---------- avance ---------- */
-function saveState(){
-  if (!S.cues.length) return toast('Nada que guardar');
-  const data = {
-    v: 1, cap: el.cCap.value, transName: S.transName, mediaName: S.mediaName,
+function estado(){
+  return {
+    v: 2, cap: el.cCap.value, transName: S.transName, mediaName: S.mediaName,
     cues: S.cues.length, dur: S.dur,
     lineas: S.cues.map(c => [+c.ini.toFixed(3), +c.fin.toFixed(3), c.texto, c.raw]),
     hints: [...S.hints],
+    moms: [...S.moms.entries()],
+    edited: [...S.edited],
     fps: el.cFps.value, startTC: el.cStart.value, path: el.cPath.value,
-    marks: [...S.marks.entries()]
+    marks: [...S.marks.entries()],
+    when: Date.now()
   };
-  download('cap-' + cap() + '-avance.json', JSON.stringify(data), 'application/json');
+}
+function saveState(){
+  if (!S.cues.length) return toast('Nada que guardar');
+  download('cap-' + cap() + '-avance.json', JSON.stringify(estado()), 'application/json');
   clean();
+}
+
+/* Copia de seguridad en el propio navegador: no reemplaza a «Guardar avance» (esa es la que
+   te llevas y la que sobrevive a cambiar de equipo), pero evita perder una sesión entera. */
+const LS = 'etiquetador-ale-evo-v2';
+let tAuto = null;
+function autoguardar(){
+  clearTimeout(tAuto);
+  tAuto = setTimeout(() => {
+    try { localStorage.setItem(LS, JSON.stringify(estado())); } catch(_){}
+  }, 2500);
+}
+function hayRespaldo(nombre){
+  try {
+    const d = JSON.parse(localStorage.getItem(LS) || 'null');
+    if (d && d.transName === nombre && d.marks && (d.marks.length || (d.moms||[]).length)) return d;
+  } catch(_){}
+  return null;
 }
 function loadState(data){
   if (!S.cues.length) return toast('Carga primero la transcripción');
@@ -1034,6 +1304,8 @@ function loadState(data){
     S.hints = new Set(data.hints || []);
   }
   S.marks = new Map(data.marks.map(([k,v]) => [+k, v]));
+  S.moms = new Map((data.moms || []).map(([k,v]) => [+k, v]));
+  S.edited = new Set(data.edited || []);
   S.undo = []; S.cur = 0; S.curW = 0;
   if (data.cap) el.cCap.value = data.cap;
   if (data.fps) el.cFps.value = data.fps;
@@ -1051,6 +1323,7 @@ function toast(m){
 }
 function dirty(){
   S.dirty = true;
+  autoguardar();
   el.saveState.textContent = 'sin guardar';
   el.saveState.className = 'pill';
   el.saveState.style.color = 'var(--warn)';
@@ -1074,6 +1347,7 @@ document.getElementById('fTrans').addEventListener('change', e => {
       return;
     }
     S.cues = cues; S.marks = marks; S.undo = []; S.cur = 0; S.now = -1; S.auto = auto || []; S.hints = hints || new Set(); S.curW = 0;
+    S.moms = new Map(); S.edited = new Set();
     S.transName = f.name; S.dur = cues[cues.length-1].fin;
     el.pTrans.textContent = f.name + ' · ' + cues.length + ' líneas';
     el.pTrans.className = 'pill on';
@@ -1081,6 +1355,16 @@ document.getElementById('fTrans').addEventListener('change', e => {
     if (m && !el.cCap.value) el.cCap.value = m[1];
     renderDoc(); renderStats(); clean();
     if (marks.size) toast('Traía ' + marks.size + ' marcas: las cargué');
+    const bk = hayRespaldo(f.name);
+    if (bk){
+      const min = Math.round((Date.now() - (bk.when || 0)) / 60000);
+      el.warns.insertAdjacentHTML('afterbegin',
+        '<div class="warn o">Tengo una copia de este archivo de hace '+
+        (min < 60 ? min + ' min' : Math.round(min/60) + ' h') + ' con <b>' + bk.marks.length +
+        '</b> marcas y <b>' + (bk.moms || []).length + '</b> momentos. ' +
+        '<a data-bk="1">Recuperarla</a></div>');
+      S.backup = bk;
+    }
   };
   r.readAsText(f, 'utf-8');
 });
@@ -1110,6 +1394,8 @@ document.getElementById('fState').addEventListener('change', e => {
 el.doc.addEventListener('click', e => {
   const del = e.target.closest('[data-del]');
   if (del){ setMark(+del.dataset.del, null); return; }
+  const mm = e.target.closest('[data-mom]');
+  if (mm){ S.moms.delete(+mm.dataset.mom); renderDoc(); renderStats(); dirty(); return; }
   const hint = e.target.closest('[data-hint]');
   if (hint){ goCue(+hint.dataset.hint); return; }
   const w = e.target.closest('.w');
@@ -1122,9 +1408,15 @@ el.doc.addEventListener('click', e => {
   const c = e.target.closest('.cue');
   if (c){ S.cur = +c.dataset.i; S.curW = 0; markCursor(); seek(S.cues[S.cur].ini); }
 });
+el.doc.addEventListener('dblclick', e => {
+  const w = e.target.closest('.w');
+  if (w) editarPalabra(w);
+});
 el.warns.addEventListener('click', e => {
   const g = e.target.closest('[data-go]');   if (g) return goCue(+g.dataset.go);
   const p = e.target.closest('[data-gap]');  if (p) return gotoGap();
+  const bk = e.target.closest('[data-bk]');
+  if (bk && S.backup){ loadState(S.backup); return; }
   const a = e.target.closest('[data-auto]');
   if (a){
     const nombres = [...new Set(S.auto.map(x => x.name))];
@@ -1172,18 +1464,21 @@ function playPause(){
 
 document.addEventListener('keydown', e => {
   const t = e.target.tagName;
-  if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+  if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA' || e.target.isContentEditable) return;
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z'){ e.preventDefault(); return undo(); }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
   const map = {' ':playPause, a:()=>marcar('ALE'), e:()=>marcar('EVO'),
                x:()=>setMark(target(),null), g:gotoGap, s:saveState,
                d:dividir, n:siguienteHint,
+               enter:()=>{ const nd = el.doc.querySelector('.cue[data-i="'+S.cur+'"] .w[data-w="'+S.curW+'"]');
+                           if (nd) editarPalabra(nd); },
                '[':()=>moveMark(-1), ']':()=>moveMark(1),
                arrowleft:()=>seek(el.v.currentTime-3), arrowright:()=>seek(el.v.currentTime+3),
                arrowup:()=>goCue(S.cur-1), arrowdown:()=>goCue(S.cur+1)};
   const speeds = {'1':0.75,'2':1,'3':1.25,'4':1.5,'5':1.75,'6':2};
   if (speeds[k]){ e.preventDefault(); el.rate.value = speeds[k]; el.v.playbackRate = speeds[k]; return toast(speeds[k]+'×'); }
+  if (MOMK[k]){ e.preventDefault(); return momento(MOMK[k]); }
   const fn = map[e.key === ' ' ? ' ' : k];
   if (fn){ e.preventDefault(); fn(); }
 });
